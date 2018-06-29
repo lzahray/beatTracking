@@ -63,9 +63,11 @@ trainingMFCCs = []
 mfccFolder = "newmfccs"
 answerFolder = "../../Downloads/AIST.RWC-MDB-P-2001.BEAT"
 audioFolder = "/n/sd1/music/RWC-MDB/P/wav"
+listOfSongsInOrder = []
 for filename in os.listdir(mfccFolder):
     #get song number
     number = filename[4:7]
+    listOfSongsInOrder.append(number)
 
     #load features we made in firstAttemptBeatTracking.py
     features = np.load(mfccFolder+"/"+filename)
@@ -92,8 +94,8 @@ for filename in os.listdir(mfccFolder):
 
     #append the features and target to trainingMFCCs
     trainingMFCCs.append((torch.from_numpy(features).to(DEVICE).float(), torch.from_numpy(target).to(DEVICE).float()))  
-
-    
+listOfSongsInOrder = np.array(listOfSongsInOrder)
+print("songsInOrder are ", listOfSongsInOrder)    
 #trainingMFCCs is now list of (mfcc, beatvector)
 
 
@@ -115,6 +117,10 @@ allIndices = np.arange(0, len(trainingMFCCs))
 print("length of all indices ", len(allIndices))
 indicesTraining = np.random.choice(allIndices,size=int(0.8*len(trainingMFCCs)), replace=False)
 indicesTest = np.array([i for i in allIndices if i not in indicesTraining])
+print("Training indices are ", indicesTraining)
+print("Training songs are ", listOfSongsInOrder[indicesTraining])
+print("Test indices are ", indicesTest)
+print("Test songs are ", listOfSongsInOrder[indicesTest])
 print("num training: ", len(indicesTraining))
 print("num testing: ", len(indicesTest))
 
@@ -164,6 +170,7 @@ for epoch in range(500):
                 print("max prob of beat ", tag_scores.max().item())
         #if epoch %4==0:
         newAvgLoss = np.average(losses)
+        print("new avg loss on test ", newAvgLoss)
         if newAvgLoss < averageLoss:
             stopCount = 0
         else:
@@ -172,7 +179,8 @@ for epoch in range(500):
 
 
 
-    for mfccs, targets in trainingMFCCs:
+    for j in indicesTraining:
+        mfccs, targets = trainingMFCCs[j]
         if i%10 == 0:
             print(i)
         model.zero_grad()
@@ -185,10 +193,9 @@ for epoch in range(500):
     
     print("done with epoch ", epoch)
     #EVALUATE PERFORMANCE EVERY EPOCH
+    torch.save(model.state_dict(),'modelDictWeekend'+str(epoch%25)+'.pth')
     
-    torch.save(model.state_dict(),'modelDictBCE.pth')
-    
-    if stopCount >= 20:
+    if stopCount >= 10:
         print("We haven't made progress forever")
         break
 

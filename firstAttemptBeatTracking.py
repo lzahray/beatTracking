@@ -57,7 +57,7 @@ for filename in os.listdir(audioFolder):
         #delete first row, the internet said this doesn't give much info
         mfccs = mfccs[1:]
         
-        #Make the mean for each feature 0 - COMMENTED OUT FOR NOW, unsure it's correct
+        #Make the mean for each feature 0 - COMMENTED OUT FOR NOW, unsure it's correct, we can do it later anyway
         #mfccs = sklearn.preprocessing.scale(mfccs,axis=1) #apparently this does it across rows, same as np yay
         # print(mfccs.mean(axis=1))
         # print("mfccs size ", mfccs.shape)
