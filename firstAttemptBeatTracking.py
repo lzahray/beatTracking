@@ -52,10 +52,13 @@ for filename in os.listdir(audioFolder):
     for windowSize in sizes:
 
         #get mfcc for specified hop and window size
-        mfccs = librosa.feature.mfcc(x,sr=fs, hop_length = hopSize, n_fft = windowSize)
-
+        mfccs = librosa.feature.melspectrogram(x,sr=fs, hop_length = hopSize, n_fft = windowSize, fmax=17000, fmin=30, n_mels = 64)
+        #spectro = librosa.core.spectrum._spectrogram(x,sr=fs,n_fft = windowSize, hop_length = hopSize,power=2)
+        #print("spectro shape is ", spectro.shape)
+        print("window size ", windowSize)
+        print("mfcc shape is ", mfccs.shape)
         #delete first row, the internet said this doesn't give much info
-        mfccs = mfccs[1:]
+        #mfccs = mfccs[1:]
         
         #Make the mean for each feature 0 - COMMENTED OUT FOR NOW, unsure it's correct, we can do it later anyway
         #mfccs = sklearn.preprocessing.scale(mfccs,axis=1) #apparently this does it across rows, same as np yay
@@ -84,7 +87,7 @@ for filename in os.listdir(audioFolder):
     print("dim of finalFeatures: ", finalFeatures.shape)
 
     #Write features for this song to file
-    np.save("newmfccs/RM-P"+str(number),finalFeatures)
+    np.save("melspectrograms/RM-P"+str(number),finalFeatures)
         
 
 
