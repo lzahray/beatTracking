@@ -90,7 +90,7 @@ for k in range(5):
             print("on TRAINING songs: ")
             losses = np.zeros(len(indicesTraining))
             for j in range(len(indicesTraining)):
-                model.init_hidden()
+                model.hidden = model.init_hidden()
                 features, targets = featuresAndGT[indicesTraining[j]]
                 tag_scores = model(features)
                 #tag_scores = F.softmax(tag_scores, 1)
@@ -107,7 +107,7 @@ for k in range(5):
             print("On TEST songs: ")
             losses = np.zeros(len(indicesTest))
             for j in range(len(indicesTest)):
-                model.init_hidden()
+                model.hidden = model.init_hidden()
                 features, targets = featuresAndGT[indicesTest[j]]
                 # print("number of 1s ", targets.sum())
                 # print("percent ones is ", targets.sum().item()/float(len(targets)))
@@ -137,7 +137,7 @@ for k in range(5):
             if i%10 == 0:
                 print(i)
             model.zero_grad()
-            model.init_hidden()
+            model.hidden = model.init_hidden()()
             scores = model(features)
             loss = loss_function(scores, targets)
             loss.backward()

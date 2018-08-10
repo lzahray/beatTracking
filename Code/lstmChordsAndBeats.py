@@ -11,11 +11,22 @@ from dataFunctions import *
 import argparse
 import time
 
-# parser = argparse.ArgumentParser()
-# parser.add_argument("cross_validation_set")
-# args = parser.parse_args()
-# k = args.cross_validation_set
-versionNumber = "beatsChords1"
+parser = argparse.ArgumentParser()
+parser.add_argument("num_layers_model1")
+parser.add_argument("hidden_dim_model1")
+parser.add_argument("output_model1")
+parser.add_argument("num_layers_other")
+parser.add_argument("hidden_dim_other")
+args = parser.parse_args()
+num_layers_model1 = int(args.num_layers_model1)
+hidden_dim_model1 = int(args.hidden_dim_model1)
+output_model1 = int(args.output_model1)
+num_layers_other = int(args.num_layers_other)
+hidden_dim_other = int(args.hidden_dim_other)
+
+versionNumber = "beatsChordsLayerOne"+str(num_layers_model1)+"HiddenOne"+str(hidden_dim_model1)+"OutputOne"+str(output_model1)+"LayerOther"+str(num_layers_other)+"HiddenOther"+str(hidden_dim_other)
+if not os.path.exists("../"+versionNumber):
+    os.makedirs("../"+versionNumber)
 fs = 44100
 hopSize = int(44100/100)
 
@@ -24,12 +35,12 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("device is ", DEVICE)
 
 #PREP TRAINING DATA WITH GROUND TRUTH
-featureFolder = "../Features/beatsChordsFeaturesTargets/"
+featureFolder = "../Features/mel128ChromaCQTWithTargets/"
 answerFolder = "../../../Downloads/AIST.RWC-MDB-P-2001.BEAT"
 audioFolder = "/n/sd1/music/RWC-MDB/P/wav"
     
 listOfSongsInOrder = [i for i in range(1,101) if ('0'*(3-len(str(i))) + str(i)) not in weirdTimes]
-listOfSongsInOrder = listOfSongsInOrder[:10]
+#listOfSongsInOrder = listOfSongsInOrder[:10]
 print("length of songsInOrder ", len(listOfSongsInOrder))
 
 #LOSS FUNCTIONS
@@ -39,16 +50,17 @@ if torch.cuda.is_available:
     loss_function_beat.cuda()
     loss_function_chord.cuda()
 
-numFeatures = np.load("../Features/moreFeatures/RM-P001.npy").shape[1]
+numFeatures = np.load(featureFolder+"1features.npy").shape[1]
+print("num features ", numFeatures)
 
 
 #GET FEATURES
 #featuresAndGT = getMoreFeaturesAndGroundTruthDownbeats(featureFolder, answerFolder, getChords = True)
-featuresAndGT = []
-for song in listOfSongsInOrder:
-    print(song)
-    featuresAndGT.append((torch.from_numpy(np.load(featureFolder+str(song)+"features.npy")).float(), torch.from_numpy(np.load(featureFolder+str(song)+"beatTargets.npy")).long(), torch.from_numpy(np.load(featureFolder+str(song)+"chordTargets.npy")).long()))
-print("gots the features yo")
+# featuresAndGT = []
+# for song in listOfSongsInOrder:
+#     print(song)
+#     featuresAndGT.append((torch.from_numpy(np.load(featureFolder+str(song)+"features.npy")).float(), torch.from_numpy(np.load(featureFolder+str(song)+"beatTargets.npy")).long(), torch.from_numpy(np.load(featureFolder+str(song)+"chordTargets.npy")).long()))
+# print("gots the features yo")
 
 #FOR CROSS-FOLD VALIDATION ORGANIZATION
 allIndices = np.arange(0, len(listOfSongsInOrder))
@@ -59,11 +71,11 @@ for k in range(5):
     print("starting at k= ", k)
 
     #INSTANTIATE MODELS
-    model1 = LSTMAny(numFeatures, 80, 50, 2).to(DEVICE)
+    model1 = LSTMAny(numFeatures, hidden_dim_model1, output_model1, num_layers_model1).to(DEVICE)
     model1.apply(init_weight)
-    modelBeat = LSTMAny(50, 25, 3, 2).to(DEVICE)
+    modelBeat = LSTMAny(output_model1, hidden_dim_other, 3, num_layers_other).to(DEVICE)
     modelBeat.apply(init_weight)
-    modelChord = LSTMAny(50, 25, 25, 2).to(DEVICE) #for now let's just include no chord? ehhhhh
+    modelChord = LSTMAny(output_model1, hidden_dim_other, 25, num_layers_other).to(DEVICE) #for now let's just include no chord? ehhhhh
     modelChord.apply(init_weight)
 
     #OPTIMIZER
@@ -104,7 +116,7 @@ for k in range(5):
 
             #LOSS FOR TRAINING
             print("on TRAINING songs: ")
-            choice = np.random.choice(indicesTraining, 2, replace=False)
+            choice = np.random.choice(indicesTraining, 20, replace=False)
             losses = np.zeros(len(choice))
             chordLosses = np.zeros(len(choice))
             beatLosses = np.zeros(len(choice))
@@ -115,13 +127,13 @@ for k in range(5):
                 modelBeat.hidden = modelBeat.init_hidden()
                 modelChord.hidden = modelChord.init_hidden()
                 timeBeforeLoad = time.time()
-                features = featuresAndGT[choice[j]][0].to(DEVICE)
-                targetsBeat = featuresAndGT[choice[j]][1].to(DEVICE)
-                targetsChord = featuresAndGT[choice[j]][2].to(DEVICE)
+                features = torch.from_numpy(np.load(featureFolder+str(song)+"features.npy")).to(DEVICE)
+                targetsBeat = torch.from_numpy(np.load(featureFolder+str(song)+"beatTargets.npy")).to(DEVICE)
+                targetsChord = torch.from_numpy(np.load(featureFolder+str(song)+"chordTargets.npy")).to(DEVICE)
                 timeAfterLoad = time.time()
 
                 intermediate = model1(features)
-                print("intermediate shape is ", intermediate.shape)
+                #print("intermediate shape is ", intermediate.shape)
                 beatTag = modelBeat(intermediate)
                 chordTag = modelChord(intermediate)
                 #tag_scores = F.softmax(tag_scores, 1)
@@ -158,9 +170,9 @@ for k in range(5):
                 model1.hidden = model1.init_hidden()
                 modelBeat.hidden = modelBeat.init_hidden()
                 modelChord.hidden = modelChord.init_hidden()
-                features = featuresAndGT[indicesTest[j]][0].to(DEVICE)
-                targetsBeat = featuresAndGT[indicesTest[j]][1].to(DEVICE)
-                targetsChord = featuresAndGT[indicesTest[j]][2].to(DEVICE)
+                features = torch.from_numpy(np.load(featureFolder+str(song)+"features.npy")).to(DEVICE)
+                targetsBeat = torch.from_numpy(np.load(featureFolder+str(song)+"beatTargets.npy")).to(DEVICE)
+                targetsChord = torch.from_numpy(np.load(featureFolder+str(song)+"chordTargets.npy")).to(DEVICE)
 
                 intermediate = model1(features)
                 
@@ -184,9 +196,9 @@ for k in range(5):
             #SEE IF WE IMPROVED OUR LOSS
             if newAvgLoss < bestLoss:
                 stopCount = 0
-                # torch.save(model1.state_dict(),fileForDict+'model1.pth')
-                # torch.save(modelBeat.state_dict(),fileForDict+'modelBeat.pth')
-                # torch.save(modelChord.state_dict(),fileForDict+'modelChord.pth')
+                torch.save(model1.state_dict(),fileForDict+'model1.pth')
+                torch.save(modelBeat.state_dict(),fileForDict+'modelBeat.pth')
+                torch.save(modelChord.state_dict(),fileForDict+'modelChord.pth')
                 bestLoss = newAvgLoss
             else:
                 print("didn't make progress this time")
@@ -205,9 +217,9 @@ for k in range(5):
         i = 0
         for j in range(len(indicesTraining)):
             song = listOfSongsInOrder[indicesTraining[j]]
-            features = featuresAndGT[indicesTraining[j]][0].to(DEVICE)
-            targetsBeat = featuresAndGT[indicesTraining[j]][1].to(DEVICE)
-            targetsChord = featuresAndGT[indicesTraining[j]][2].to(DEVICE)
+            features = torch.from_numpy(np.load(featureFolder+str(song)+"features.npy")).to(DEVICE)
+            targetsBeat = torch.from_numpy(np.load(featureFolder+str(song)+"beatTargets.npy")).to(DEVICE)
+            targetsChord = torch.from_numpy(np.load(featureFolder+str(song)+"chordTargets.npy")).to(DEVICE)
 
             if i%5 == 0:
                 print(i)
@@ -231,12 +243,12 @@ for k in range(5):
         
         print("done with epoch ", epoch)
         #SAVE MODEL PARAMETERS after every epoch
-        # np.save("../"+versionNumber+"/lossesTrainingK"+str(k),lossesTraining)
-        # np.save("../"+versionNumber+"/lossesTestK"+str(k),lossesTest)
-        # np.save("../"+versionNumber+"/lossesBeatTrainingK"+str(k),lossesBeatTraining)
-        # np.save("../"+versionNumber+"/lossesBeatTestK"+str(k),lossesBeatTest)
-        # np.save("../"+versionNumber+"/lossesChordTrainingK"+str(k),lossesChordTraining)
-        # np.save("../"+versionNumber+"/lossesChordTestK"+str(k),lossesChordTest)
+        np.save("../"+versionNumber+"/lossesTrainingK"+str(k),lossesTraining)
+        np.save("../"+versionNumber+"/lossesTestK"+str(k),lossesTest)
+        np.save("../"+versionNumber+"/lossesBeatTrainingK"+str(k),lossesBeatTraining)
+        np.save("../"+versionNumber+"/lossesBeatTestK"+str(k),lossesBeatTest)
+        np.save("../"+versionNumber+"/lossesChordTrainingK"+str(k),lossesChordTraining)
+        np.save("../"+versionNumber+"/lossesChordTestK"+str(k),lossesChordTest)
         end = time.time()
         print("ACTUAL TRAINING TIME ", end-timeTesting)
         print("TIME THIS EPOCH TOOK: ", end-start)

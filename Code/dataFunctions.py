@@ -14,35 +14,232 @@ weirdTimes = ['006', '022', '028', '030', '034', '037', '038', '041',  '043', '0
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("device in data functions is ", DEVICE)
 class LSTMAny(nn.Module):
-    def __init__(self, feature_dim, hidden_dim, tagset_size, num_layers):
+    def __init__(self, feature_dim, tagset_size, hyper_parameters):
         #can have any number of layers but they need to have the same hidden size which for now is fine 
         super(LSTMAny, self).__init__()
-        self.hidden_dim = hidden_dim
+        self.hidden_dim = hyper_parameters["hidden_dim"]
         self.feature_dim = feature_dim
-        self.num_layers = num_layers
+        self.num_layers = hyper_parameters["num_layers"]
         self.tagset_size = tagset_size
-        self.lstm = nn.LSTM(feature_dim, hidden_dim, num_layers = self.num_layers, bidirectional=True)
+        self.lstm = nn.LSTM(feature_dim, self.hidden_dim, num_layers = self.num_layers, bidirectional=True)
 
-        self.hidden2tag = nn.Linear(hidden_dim*2, tagset_size)
-        self.hidden = self.init_hidden()
+        self.hidden2tag = nn.Linear(self.hidden_dim*2, tagset_size)
+        self.init_hidden()
+        self.num_losses = 1
     
     def init_hidden(self):
-        return (torch.zeros(2*self.num_layers, 1, self.hidden_dim, device=DEVICE), torch.zeros(2*self.num_layers, 1, self.hidden_dim, device=DEVICE))
+        self.hidden = (torch.zeros(2*self.num_layers, 1, self.hidden_dim, device=DEVICE), torch.zeros(2*self.num_layers, 1, self.hidden_dim, device=DEVICE))
 
     def forward(self, mfcc):
-        #mfcc is axis 0=time, axis 1=features
+        self.init_hidden()
         lstm_out, self.hidden = self.lstm(mfcc.view(mfcc.shape[0], 1, mfcc.shape[1]), self.hidden)
-        #print("running foward one time yo")
-        #h = torch.zeros(2*self.num_layers, 1, self.hidden_dim, device=DEVICE)
-        #c = torch.zeros(2*self.num_layers, 1, self.hidden_dim, device=DEVICE)
-        #lstm_out, self.hidden = self.lstm(mfcc.view(mfcc.shape[0],1,mfcc.shape[1]), (h,c))
-
         tag_space = self.hidden2tag(lstm_out.view(mfcc.shape[0], -1))
+
         # tag_scores = F.softmax(tag_space, dim=1)
-        if self.tagset_size == 2:
-            return tag_space[:,1]
+
+        return tag_space
+    
+    def calculate_loss(self, loss_functions, tag, targets ):
+        loss_function = loss_functions[0]
+        loss = loss_function(tag, targets)
+        return [loss]
+
+#yeah we'll have to make sure this works.....
+class LSTMSimpleJoint(nn.Module):
+    def __init__(self, feature_dim, tagset_sizes, hyper_parameters):
+        #can have any number of layers but they need to have the same hidden size which for now is fine 
+        super(LSTMSimpleJoint, self).__init__()
+        self.model1 = LSTMAny(feature_dim, hyper_parameters["output_model1"], {"hidden_dim":hyper_parameters["hidden_dim_model1"], "num_layers": hyper_parameters["num_layers_model1"]}).to(DEVICE)
+        self.model1.init_hidden()
+        self.modelLeft = LSTMAny(hyper_parameters["output_model1"], tagset_sizes["left"], {"hidden_dim":hyper_parameters["hidden_dim_modelLeft"], "num_layers": hyper_parameters["num_layers_modelLeft"]}).to(DEVICE)
+        self.modelLeft.init_hidden()
+        self.modelRight = LSTMAny(hyper_parameters["output_model1"], tagset_sizes["right"], {"hidden_dim":hyper_parameters["hidden_dim_modelRight"], "num_layers": hyper_parameters["num_layers_modelRight"]}).to(DEVICE)
+        self.modelRight.init_hidden()
+        self.num_losses = 3
+
+    def forward(self, features):
+        #hidden will already be inited in the forward of each dude
+        intermediate = self.model1(features)
+        leftTag = self.modelLeft(intermediate)
+        rightTag = self.modelRight(intermediate)
+        return [leftTag, rightTag]
+    
+    def calculate_loss(self, loss_functions, tag, targets):
+        leftTag, rightTag = tag
+        leftTargets, rightTargets = targets
+        loss_function_left, loss_function_right = loss_functions
+        loss_left = loss_function_left(leftTag, leftTargets)
+        loss_right = loss_function_right(rightTag, rightTargets)
+        loss = 0.5 * loss_left + 0.5 * loss_right
+        return [loss, loss_left, loss_right]
+
+class LSTMComplexJoint(nn.Module):
+    def __init__(self, feature_dim, tagset_sizes, hyper_parameters):
+        #can have any number of layers but they need to have the same hidden size which for now is fine 
+        super(LSTMComplexJoint, self).__init__()
+        self.model1 = LSTMAny(feature_dim, hyper_parameters["output_model1"], {"hidden_dim":hyper_parameters["hidden_dim_model1"], "num_layers": hyper_parameters["num_layers_model1"]}).to(DEVICE)
+        self.model1.init_hidden()
+
+        self.modelLeft = LSTMAny(hyper_parameters["output_model1"], tagset_sizes["left"], {"hidden_dim":hyper_parameters["hidden_dim_modelLeft"], "num_layers": hyper_parameters["num_layers_modelLeft"]}).to(DEVICE)
+        self.modelLeft.init_hidden()
+
+        self.modelCenter = LSTMAny(hyper_parameters["output_model1"] + tagset_sizes["left"], tagset_sizes["center"], {"hidden_dim":hyper_parameters["hidden_dim_modelCenter"], "num_layers": hyper_parameters["num_layers_modelCenter"]}).to(DEVICE)
+        self.modelCenter.init_hidden()
+
+        self.modelRight = LSTMAny(hyper_parameters["output_model1"] + tagset_sizes["left"] + tagset_sizes["center"], tagset_sizes["right"], {"hidden_dim":hyper_parameters["hidden_dim_modelRight"], "num_layers": hyper_parameters["num_layers_modelRight"]}).to(DEVICE)
+        self.modelRight.init_hidden()
+
+        self.sigmoid = nn.Sigmoid()
+        self.softmax = nn.Softmax(dim=1)
+
+        self.num_losses = 4
+
+    def forward(self, features):
+        #hidden will already be inited in the forward of each dude
+        intermediate = self.model1(features)
+
+        leftTag = self.modelLeft(intermediate)
+
+        if self.modelLeft.tagset_size == 2:
+            #print("sigmoiding left")
+            forCenter = torch.cat((intermediate, self.sigmoid(leftTag) ), 1).to(DEVICE)
         else:
-            return tag_space
+            #print("softmaxing left")
+            forCenter = torch.cat((intermediate, self.softmax(leftTag)), 1).to(DEVICE)
+        centerTag = self.modelCenter(forCenter)
+
+        if self.modelCenter.tagset_size == 2: 
+            #print("sigmoiding center")
+            forRight = torch.cat((forCenter, self.sigmoid(centerTag)), 1).to(DEVICE)
+        else:
+            #print("softmaxing center")
+            forRight = torch.cat((forCenter, self.softmax(centerTag)),1).to(DEVICE)
+        rightTag = self.modelRight(forRight)
+
+        return [leftTag, centerTag, rightTag]
+    
+    def calculate_loss(self, loss_functions, tag, targets):
+        leftTag, centerTag, rightTag = tag
+        leftTargets, centerTargets, rightTargets = targets
+        loss_function_left, loss_function_center, loss_function_right = loss_functions
+        #We are assuming that if the tagset of one of the models is 2, the user will 
+        #and pass in the binary cross entropy loss function with logits! 
+        if self.modelLeft.tagset_size == 2:
+            loss_left = loss_function_left(leftTag[:,1], leftTargets.float())
+        else:
+            loss_left = loss_function_left(leftTag, leftTargets)
+        if self.modelCenter.tagset_size == 2:
+            loss_center = loss_function_center(centerTag[:,1], centerTargets)
+        else:
+            loss_center = loss_function_center(centerTag, centerTargets)
+        if self.modelRight.tagset_size == 2:
+            loss_right = loss_function_right(rightTag[:,1], rightTargets.float())
+        else:
+            loss_right = loss_function_right(rightTag, rightTargets)
+        loss = (loss_left + loss_center + loss_right) / 3.0
+        return [loss, loss_left, loss_right, loss_center]
+
+#we can fix this later to take more than just chord, but for now let's just do chord
+class ConvolutionAndLSTM(nn.Module):
+    def __init__(self, feature_dim, tagset_sizes, hyper_parameters):
+        super(ConvolutionAndLSTM, self).__init__()
+        #right now feature_dim isn't used but might be in the future 
+        self.num_losses = 1
+        self.hyper_parameters = hyper_parameters
+        self.num_divisions = hyper_parameters.get("num_divisions",1)
+        self.num_octaves =  hyper_parameters.get("num_octaves",7)
+        self.octave_group = hyper_parameters.get("octave_group",4) #we'll make 4 our kernal size in this direction
+        #For each of these shapes, we'll do 2 channels of convolution
+        self.num_out_channels = hyper_parameters.get("num_out_channels",3)
+        self.conv1 = nn.Conv2d(1,self.num_out_channels,(self.num_octaves, self.num_divisions), stride=(1,self.num_divisions) ).to(DEVICE)
+        self.conv3 = nn.Conv2d(1,self.num_out_channels,(self.octave_group, self.num_divisions*3), stride=(1,self.num_divisions) ).to(DEVICE) #4 is just some # of octaves I like for no reason
+        self.conv5 = nn.Conv2d(1,self.num_out_channels,(self.octave_group, self.num_divisions*5), stride=(1,self.num_divisions) ).to(DEVICE)
+        
+        self.feature_dim_conv1 = self.num_out_channels*12 ###
+        self.feature_dim_conv3 = (self.num_octaves-self.octave_group+1)*self.num_out_channels*12
+        self.feature_dim_conv5 = (self.num_octaves-self.octave_group+1)*self.num_out_channels*12
+        self.feature_dim_conv = self.feature_dim_conv1+self.feature_dim_conv3+self.feature_dim_conv5
+        print("feature_dim_conv ", self.feature_dim_conv)
+        #To test only conv1
+        #self.feature_dim_conv = self.feature_dim_conv5
+
+        self.lstm = LSTMAny(self.feature_dim_conv, 25, {"hidden_dim": hyper_parameters["hidden_dim"], "num_layers":hyper_parameters["num_layers"]}).to(DEVICE)
+
+        self.lstm.init_hidden()
+
+    def forward(self, features):
+        out1 = self.conv1(features[:,:,:,0:12*self.num_divisions])
+        out1 = out1.view((out1.shape[0], self.feature_dim_conv1))
+
+        out3 = self.conv3(features[:,:,:,0:(12+3-1)*self.num_divisions])
+        #print("out3 natural shape ", out3.shape)
+        out3 = out3.view((out3.shape[0], self.feature_dim_conv3))
+
+        out5 = self.conv5(features[:,:,:,0:(12+5-1)*self.num_divisions])
+        out5 = out5.view((out5.shape[0], self.feature_dim_conv5))
+
+        #To test one of conv1, conv2, or conv3, comment out the following line
+        features_lstm = torch.cat((out1,out3,out5),1)
+        #and uncomment the following line (change to out3 or out5 if desired)
+        #features_lstm = out5
+        #print("lstmfeature shape ", features_lstm.shape)
+
+        #self.lstm does its own init_hidden() within its forward method, see LSTMAny class 
+        final_tag = self.lstm(features_lstm)
+        #print("final tag shape ", final_tag.shape)
+        return final_tag
+    
+    def calculate_loss(self,loss_functions, tag, targets):
+        return self.lstm.calculate_loss(loss_functions, tag, targets )
+
+
+
+
+
+
+# class LSTMAnyFlexible(nn.Module):
+#     def __init__(self, feature_dim, tagset_size, hyper_parameters):
+#         #can have any number of layers but they need to have the same hidden size which for now is fine 
+#         super(LSTMAny, self).__init__()
+#         self.hidden_dim = hyper_parameters["hidden_dim"] #this is now a list! Huzzah! 
+#         self.feature_dim = feature_dim
+#         self.num_layers = hyper_parameters["num_layers"]
+#         self.tagset_size = tagset_size
+#         self.lstm = [nn.LSTM(feature_dim, self.hidden_dim[0], num_layers = 1, bidirectional=True)]
+#         for i in range(len(1,self.hidden_dim)):
+#             self.lstm.append(nn.LSTM(self.hidden_dim[i-1]*2, self.hidden_dim[i], num_layers = 1, bidirectional=True))
+#         self.hidden = []
+#         self.init_hidden()
+#         self.num_losses = 1
+
+#     def init_hidden(self):
+#         for i in range(len(self.hidden_dim)):
+#             self.hidden.append(torch.zeros(2, 1, self.hidden_dim[i], device=DEVICE), torch.zeros(2, 1, self.hidden_dim1, device=DEVICE))
+
+#     def forward(self, mfcc):
+#         self.init_hidden()
+#         for 
+#         lstm_out, self.hidden = self.lstm(mfcc.view(mfcc.shape[0], 1, mfcc.shape[1]), self.hidden)
+#         tag_space = self.hidden2tag(lstm_out.view(mfcc.shape[0], -1))
+
+#         # tag_scores = F.softmax(tag_space, dim=1)
+
+#         return tag_space
+    
+#     def calculate_loss(self, loss_functions, tag, targets ):
+#         loss_function = loss_functions[0]
+#         loss = loss_function(tag, targets)
+#         return [loss]
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -111,7 +308,7 @@ class LSTMMulticlass3(LSTMBeatMel):
 
 class LSTMMulticlass4(nn.Module):
     def __init__(self, feature_dim, hidden_dim1, hidden_dim2, hidden_dim3, hidden_dim4, tagset_size):
-        super(LSTMMulitclass4,self).__init__()
+        super(LSTMMultitclass4,self).__init__()
         self.hidden_dim1 = hidden_dim1
         #print("hidden dim 1 is ", self.hidden_dim1)
         self.hidden_dim2 = hidden_dim2
@@ -248,6 +445,40 @@ class LSTMMulticlass4(nn.Module):
 #         #this should be seq_length, batch, 
 #         return tag_space
 
+def createModel(mode, numFeatures, hyper_parameters):
+    if mode == "justBeat": 
+        model = LSTMAny(numFeatures, 3, hyper_parameters ).to(DEVICE)
+    elif mode == "justChord":
+        model = LSTMAny(numFeatures, 25, hyper_parameters ).to(DEVICE)
+    elif mode == "simpleJoint":
+        model = LSTMSimpleJoint(numFeatures, {"left":3,"right":25}, hyper_parameters).to(DEVICE)
+    elif mode == "complexJoint":
+        model = LSTMComplexJoint(numFeatures, {"left":2, "center": 25, "right": 2}, hyper_parameters).to(DEVICE)
+    elif mode == "conv":
+        model = ConvolutionAndLSTM(numFeatures, 25, hyper_parameters).to(DEVICE)
+    return model
+
+def createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, targetFolder, mode=None):
+    features = torch.from_numpy(np.load(featureFolder+"/"+str(song)+"features.npy")).float().to(DEVICE)
+    targetsBeat = torch.from_numpy(np.load(targetFolder+"/"+str(song)+"beatTargets.npy")).long().to(DEVICE)
+    targetsChord = torch.from_numpy(np.load(targetFolder+"/"+str(song)+"chordTargets.npy")).long().to(DEVICE)
+    
+    if chord_ground_truth:
+        #here we will concat the chord features
+        chordsFeat = np.zeros((targetsChord.shape[0], 25))
+        chordsFeat[np.arange(targetsChord.shape[0]), targetsChord] = 1
+        features = torch.from_numpy(np.column_stack((features, stackNFeatures(chordsFeat,11)))).float().to(DEVICE)
+        #print("are chords nonzero? sum across time is ", np.sum(chordsFeat,axis=0))
+    if beat_ground_truth:
+        #here we will concat the beat features
+        beatsFeat = np.zeros((targetsBeat.shape[0], 3))
+        beatsFeat[np.arange(targetsBeat.shape[0]), targetsBeat] = 1
+        features = torch.from_numpy(np.column_stack((features,stackNFeatures(beatsFeat,11)))).float().to(DEVICE)
+        print("are beats nonzero? sum across time is ", np.sum(beatsFeat,axis=0))
+    if mode == "conv":
+        features = features.view((features.shape[0],1, features.shape[1],features.shape[2]))
+        #print("feature shape ", features.shape)
+    return [features, targetsBeat, targetsChord]
 
 def init_weight(m):
     """
@@ -269,10 +500,11 @@ def init_weight(m):
             if 'bias' in name:
                 param.data.fill_(0)
 
-    # if classname.find('Conv1d') != -1:
-    #     nn.init.kaiming_normal_(m.weight.data)
-    #     if isinstance(m.bias, nn.parameter.Parameter):
-    #         m.bias.data.fill_(0)
+    if classname.find('Conv2d') != -1:
+        print("found a conv")
+        nn.init.kaiming_normal_(m.weight.data)
+        if isinstance(m.bias, nn.parameter.Parameter):
+            m.bias.data.fill_(0)
 
 
 
@@ -422,4 +654,12 @@ def getGroundTruthChords(numFrames, songNumber, answerFolder):
 
 
         
-
+def stackNFeatures(originalFeatureVec, N):
+    #N is total and should be odd, we're doing 11
+    toReturn = np.zeros((originalFeatureVec.shape[0], originalFeatureVec.shape[1]*N))
+    paddedZeros = np.concatenate((np.concatenate((np.zeros((int(N/2), originalFeatureVec.shape[1])), originalFeatureVec), axis=0), np.zeros((int(N/2), originalFeatureVec.shape[1]))), axis=0) 
+    for i in range(N):
+            placeLeft = originalFeatureVec.shape[1]*i
+            placeRight = originalFeatureVec.shape[1]*(1+i)
+            toReturn[:,placeLeft:placeRight] = paddedZeros[i:i+originalFeatureVec.shape[0], :] 
+    return toReturn

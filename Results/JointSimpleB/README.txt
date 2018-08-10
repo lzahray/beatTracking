@@ -1,0 +1,5 @@
+mode simpleJoint
+hyper parameters {'output_model1': 80, 'hidden_dim_model1': 50, 'num_layers_model1': 1, 'hidden_dim_modelLeft': 40, 'num_layers_modelLeft': 2, 'hidden_dim_modelRight': 80, 'num_layers_modelRight': 2}
+feature_folder ../Features/mel128ChromaCQTWithTargets
+chord_ground_truth False
+beat_ground_truth False

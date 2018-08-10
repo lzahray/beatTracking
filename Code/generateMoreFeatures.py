@@ -23,6 +23,18 @@ def stack3Features(originalFeatureVec):
     rightStack = np.concatenate((originalFeatureVec[1:,:], np.zeros((1,originalFeatureVec.shape[1]))), axis=0)
     return np.concatenate((np.concatenate((leftStack,originalFeatureVec),axis=1), rightStack),axis=1)
 
+def stackNFeatures(originalFeatureVec, N):
+    #N is total and should be odd, we're doing 11
+    toReturn = np.zeros((originalFeatureVec.shape[0], originalFeatureVec.shape[1]*N))
+    paddedZeros = np.concatenate((np.concatenate((np.zeros((int(N/2), originalFeatureVec.shape[1])), originalFeatureVec), axis=0), np.zeros((int(N/2), originalFeatureVec.shape[1]))), axis=0) 
+    for i in range(N):
+            placeLeft = originalFeatureVec.shape[1]*i
+            placeRight = originalFeatureVec.shape[1]*(1+i)
+            toReturn[:,placeLeft:placeRight] = paddedZeros[i:i+originalFeatureVec.shape[0], :] 
+    return toReturn
+
+
+
 def normalize(originalFeatureVec):
     return (originalFeatureVec-originalFeatureVec.mean())/np.std(originalFeatureVec)
 

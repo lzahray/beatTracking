@@ -12,8 +12,8 @@ import argparse
 import time
 
 
-folderPath = "../Features/beatsChordsFeaturesTargets"
-featureFolder = "../Features/moreFeatures"
+folderPath = "../Features/mel128ChromaCQTWithTargets"
+featureFolder = "../Features/mel128ChromaCQT"
 answerFolder = "../../../Downloads/AIST.RWC-MDB-P-2001.BEAT"
 listOfSongsInOrder = [i for i in range(1,101) if ('0'*(3-len(str(i))) + str(i)) not in weirdTimes]
 featuresAndGT = getMoreFeaturesAndGroundTruthDownbeats(featureFolder, answerFolder, getChords = True)

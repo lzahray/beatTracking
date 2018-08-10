@@ -36,7 +36,7 @@ loss_function_chord = nn.CrossEntropyLoss().to(DEVICE)
 optimizer = optim.Adam(list(model1.parameters())+list(modelBeat.parameters())+list(modelChord.parameters()), lr=0.001)
 
 #RUN MODEL
-for epoch in range(10):
+for epoch in range(100):
     #resetting stuff
     model1.zero_grad()
     model1.hidden = model1.init_hidden()
