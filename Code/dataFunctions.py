@@ -21,6 +21,7 @@ class LSTMAny(nn.Module):
         self.feature_dim = feature_dim
         self.num_layers = hyper_parameters["num_layers"]
         self.tagset_size = tagset_size
+        #sometimes we've had dropout but I think not for most times that worked
         self.lstm = nn.LSTM(feature_dim, self.hidden_dim, num_layers = self.num_layers, bidirectional=True)
 
         self.hidden2tag = nn.Linear(self.hidden_dim*2, tagset_size)
@@ -163,7 +164,7 @@ class ConvolutionAndLSTM(nn.Module):
         #To test only conv1
         #self.feature_dim_conv = self.feature_dim_conv5
 
-        self.lstm = LSTMAny(self.feature_dim_conv, 25, {"hidden_dim": hyper_parameters["hidden_dim"], "num_layers":hyper_parameters["num_layers"]}).to(DEVICE)
+        self.lstm = LSTMAny(self.feature_dim_conv, tagset_sizes, {"hidden_dim": hyper_parameters["hidden_dim"], "num_layers":hyper_parameters["num_layers"]}).to(DEVICE)
 
         self.lstm.init_hidden()
 
@@ -193,7 +194,149 @@ class ConvolutionAndLSTM(nn.Module):
         return self.lstm.calculate_loss(loss_functions, tag, targets )
 
 
+def argmax(vec):
+    # return the argmax as a python int
+    _, idx = torch.max(vec, 1)
+    return idx.item()
 
+
+def prepare_sequence(seq, to_ix):
+    idxs = [to_ix[w] for w in seq]
+    return torch.tensor(idxs, dtype=torch.long)
+
+
+# Compute log sum exp in a numerically stable way for the forward algorithm
+def log_sum_exp(vec):
+    max_score = vec[0, argmax(vec)]
+    max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
+    return max_score + \
+        torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
+
+class BiLSTM_CRF(nn.Module):
+    def __init__(self, feature_dim, tagset_size, hyper_parameters):
+        super(BiLSTM_CRF, self).__init__()
+        self.tagset_size = tagset_size
+        self.start_tag = 25
+        self.stop_tag = 26
+        self.num_losses = 1
+        #make this convolution and lstm
+        self.lstm = ConvolutionAndLSTM(feature_dim, tagset_size, hyper_parameters).to(DEVICE)
+
+        # Matrix of transition parameters.  Entry i,j is the score of
+        # transitioning *to* i *from* j.
+        self.transitions = nn.Parameter(
+            torch.randn(self.tagset_size, self.tagset_size)).to(DEVICE)
+
+        # These two statements enforce the constraint that we never transfer
+        # to the start tag and we never transfer from the stop tag
+        #START TAG is 26
+        #STOP TAG is 27
+        self.transitions.data[self.start_tag, :] = -10000
+        self.transitions.data[:, self.stop_tag] = -10000
+
+    def _forward_alg(self, feats):
+        # Do the forward algorithm to compute the partition function
+        init_alphas = torch.full((1, self.tagset_size), -10000.).to(DEVICE)
+        # START_TAG has all of the score.
+        init_alphas[0][self.start_tag] = 0.
+
+        # Wrap in a variable so that we will get automatic backprop
+        forward_var = init_alphas
+
+        # Iterate through the sentence
+        for feat in feats:
+            alphas_t = []  # The forward tensors at this timestep
+            for next_tag in range(self.tagset_size):
+                # broadcast the emission score: it is the same regardless of
+                # the previous tag
+                emit_score = feat[next_tag].view(
+                    1, -1).expand(1, self.tagset_size)
+                # the ith entry of trans_score is the score of transitioning to
+                # next_tag from i
+                trans_score = self.transitions[next_tag].view(1, -1)
+                # The ith entry of next_tag_var is the value for the
+                # edge (i -> next_tag) before we do log-sum-exp
+                next_tag_var = forward_var + trans_score + emit_score
+                # The forward variable for this tag is log-sum-exp of all the
+                # scores.
+                alphas_t.append(log_sum_exp(next_tag_var).view(1))
+            forward_var = torch.cat(alphas_t).view(1, -1)
+        terminal_var = forward_var + self.transitions[self.stop_tag]
+        alpha = log_sum_exp(terminal_var)
+        return alpha
+
+    def _get_lstm_features(self, features):
+        lstm_feats = self.lstm(features)
+        return lstm_feats
+
+    def _score_sequence(self, feats, tags):
+        # Gives the score of a provided tag sequence
+        score = torch.zeros(1).to(DEVICE)
+        tags = torch.cat([torch.tensor([self.start_tag], dtype=torch.long).to(DEVICE), tags]).to(DEVICE)
+        for i, feat in enumerate(feats):
+            score = score + \
+                self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
+        score = score + self.transitions[self.stop_tag, tags[-1]]
+        return score
+
+    def _viterbi_decode(self, feats):
+        backpointers = []
+
+        # Initialize the viterbi variables in log space
+        #added a toDevice
+        init_vvars = torch.full((1, self.tagset_size), -10000.).to(DEVICE)
+        init_vvars[0][self.start_tag] = 0
+
+        # forward_var at step i holds the viterbi variables for step i-1
+        forward_var = init_vvars
+        for feat in feats:
+            bptrs_t = []  # holds the backpointers for this step
+            viterbivars_t = []  # holds the viterbi variables for this step
+
+            for next_tag in range(self.tagset_size):
+                # next_tag_var[i] holds the viterbi variable for tag i at the
+                # previous step, plus the score of transitioning
+                # from tag i to next_tag.
+                # We don't include the emission scores here because the max
+                # does not depend on them (we add them in below)
+                next_tag_var = forward_var + self.transitions[next_tag]
+                best_tag_id = argmax(next_tag_var)
+                bptrs_t.append(best_tag_id)
+                viterbivars_t.append(next_tag_var[0][best_tag_id].view(1))
+            # Now add in the emission scores, and assign forward_var to the set
+            # of viterbi variables we just computed
+            forward_var = (torch.cat(viterbivars_t) + feat).view(1, -1)
+            backpointers.append(bptrs_t)
+
+        # Transition to STOP_TAG
+        terminal_var = forward_var + self.transitions[self.stop_tag]
+        best_tag_id = argmax(terminal_var)
+        path_score = terminal_var[0][best_tag_id]
+
+        # Follow the back pointers to decode the best path.
+        best_path = [best_tag_id]
+        for bptrs_t in reversed(backpointers):
+            best_tag_id = bptrs_t[best_tag_id]
+            best_path.append(best_tag_id)
+        # Pop off the start tag (we dont want to return that to the caller)
+        start = best_path.pop()
+        assert start == self.start_tag  # Sanity check
+        best_path.reverse()
+        return path_score, best_path
+
+    def neg_log_likelihood(self, origFeatures, tags):
+        feats = self._get_lstm_features(origFeatures)
+        forward_score = self._forward_alg(feats)
+        gold_score = self._score_sequence(feats, tags)
+        return forward_score - gold_score
+
+    def forward(self, sentence):  # dont confuse this with _forward_alg above.
+        # Get the emission scores from the BiLSTM
+        lstm_feats = self._get_lstm_features(sentence)
+
+        # Find the best path, given the features.
+        score, tag_seq = self._viterbi_decode(lstm_feats)
+        return score, tag_seq
 
 
 
@@ -233,7 +376,48 @@ class ConvolutionAndLSTM(nn.Module):
 
 
 
+class LSTMAny3(nn.Module):
+    def __init__(self, feature_dim, tagset_size, hyper_parameters):
+        #can have any number of layers but they need to have the same hidden size which for now is fine 
+        super(LSTMAny3, self).__init__()
+        self.hidden_dim = hyper_parameters["hidden_dims"]
+        assert(len(self.hidden_dim) == 3)
+        self.feature_dim = feature_dim
+        self.num_layers = hyper_parameters["num_layers"]
+        assert(self.num_layers == 3)
+        self.tagset_size = tagset_size
+        self.lstm1 = nn.LSTM(feature_dim, self.hidden_dim[0], num_layers = 1, bidirectional=True)
+        self.lstm2 = nn.LSTM(self.hidden_dim[0]*2, self.hidden_dim[1], num_layers = 1, bidirectional=True)
+        self.lstm3 = nn.LSTM(self.hidden_dim[1]*2, self.hidden_dim[2], num_layers = 1, bidirectional=True)
+        self.hidden2tag = nn.Linear(self.hidden_dim[2]*2, tagset_size)
+        self.init_hidden()
+        self.num_losses = 1
+    
+    def init_hidden(self):
+        self.hidden1 = (torch.zeros(2*1, 1, self.hidden_dim[0], device=DEVICE), torch.zeros(2*1, 1, self.hidden_dim[0], device=DEVICE))
+        self.hidden2 = (torch.zeros(2*1, 1, self.hidden_dim[1], device=DEVICE), torch.zeros(2*1, 1, self.hidden_dim[1], device=DEVICE))
+        self.hidden3 = (torch.zeros(2*1, 1, self.hidden_dim[2], device=DEVICE), torch.zeros(2*1, 1, self.hidden_dim[2], device=DEVICE))
 
+    def forward(self, features):
+        self.init_hidden()
+        lstm_out1, self.hidden1 = self.lstm1(features.view(features.shape[0], 1, features.shape[1]), self.hidden1)
+        #print("shape of hidden is ", self.hidden1[0].shape)
+        #print("lstm_out1 shape is ", lstm_out1.shape)
+        #out1 = self.between12(lstm_out1)
+        lstm_out2, self.hidden2 = self.lstm2(lstm_out1, self.hidden2)
+        #print("lstm_out2 shape is ", lstm_out2.shape)
+        lstm_out3, self.hidden3 = self.lstm3(lstm_out2, self.hidden3)
+        #print("lstm_out3 shape is ", lstm_out3.shape)
+        tag_space = self.hidden2tag(lstm_out3.view(lstm_out3.shape[0], -1))
+
+        # tag_scores = F.softmax(tag_space, dim=1)
+
+        return tag_space
+    
+    def calculate_loss(self, loss_functions, tag, targets ):
+        loss_function = loss_functions[0]
+        loss = loss_function(tag, targets)
+        return [loss]
 
 
 
@@ -447,7 +631,9 @@ class LSTMMulticlass4(nn.Module):
 
 def createModel(mode, numFeatures, hyper_parameters):
     if mode == "justBeat": 
-        model = LSTMAny(numFeatures, 3, hyper_parameters ).to(DEVICE)
+        #just for now
+        #model = LSTMAny(numFeatures, 3, hyper_parameters ).to(DEVICE)
+        model = LSTMAny3(numFeatures, 3, hyper_parameters ).to(DEVICE)
     elif mode == "justChord":
         model = LSTMAny(numFeatures, 25, hyper_parameters ).to(DEVICE)
     elif mode == "simpleJoint":
@@ -456,6 +642,8 @@ def createModel(mode, numFeatures, hyper_parameters):
         model = LSTMComplexJoint(numFeatures, {"left":2, "center": 25, "right": 2}, hyper_parameters).to(DEVICE)
     elif mode == "conv":
         model = ConvolutionAndLSTM(numFeatures, 25, hyper_parameters).to(DEVICE)
+    elif mode == "crf":
+        model = BiLSTM_CRF(numFeatures, 27, hyper_parameters)
     return model
 
 def createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, targetFolder, mode=None):
@@ -475,7 +663,7 @@ def createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_groun
         beatsFeat[np.arange(targetsBeat.shape[0]), targetsBeat] = 1
         features = torch.from_numpy(np.column_stack((features,stackNFeatures(beatsFeat,11)))).float().to(DEVICE)
         print("are beats nonzero? sum across time is ", np.sum(beatsFeat,axis=0))
-    if mode == "conv":
+    if mode == "conv" or mode =="crf":
         features = features.view((features.shape[0],1, features.shape[1],features.shape[2]))
         #print("feature shape ", features.shape)
     return [features, targetsBeat, targetsChord]
@@ -601,12 +789,12 @@ def getMoreFeaturesAndGroundTruthDownbeats(featureFolder, answerFolder, getChord
     #ok forget about batches for now, really not a priority    
 
 #screw it, this function will get a single chord for the song specified 
-def getGroundTruthChords(numFrames, songNumber, answerFolder):
+def getGroundTruthChords(numFrames, songNumber, answerFolder, hopSize = 441):
     #features are just being passed in so we know the length of the song which sounds dumb but... well too late
     #print("in the func")
     fs = 44100
-    hopSize = 441
-    modificationDict = {"dim":"N", "7":"maj","sus":"N", "aug": "N","hdi":"min", "9":"maj", "min":"min","maj":"maj"}
+    #hopSize = 441
+    modificationDict = {"dim":"min", "7":"maj","sus":"maj", "aug": "maj","hdi":"min", "9":"maj", "min":"min","maj":"maj"}
     stringToIndex = {"N":0}
     equivalence = [("A","Bbb","G##"), ("A#","Bb","Cbb"), ("B","Cb","A##"), ("C","B#","Dbb"), ("C#","Db","B##"), ("D","C##","Ebb"),("D#","Eb","Fbb"),("E","D##","Fb"),("F","E#","Gbb"),("F#","Gb","E##"),("G","F##","Abb"),("G#","Ab")]
     number = 1
@@ -616,30 +804,38 @@ def getGroundTruthChords(numFrames, songNumber, answerFolder):
             stringToIndex[note+"maj"] = number+1
         number += 2
     files = [answerFolder+"/"+file for file in sorted(os.listdir(answerFolder)) if file[-3:]=="lab"]
+    print("found ", len(files), " files")
     answerFile = open(files[songNumber-1])
+    print("file name is ", files[songNumber-1])
     chordGT = np.zeros(numFrames)
     lines = answerFile.readlines()
+    print("found ", len(lines), " lines")
     answerFile.close()
     #print("num lines is ", len(lines))
     for line in lines:
-        info = line.strip().split("\t")
+        #info = line.strip().split("\t")
+        info = line.strip().split(" ")
         #print("info is ", info)
         if info[2] == "N":
             category = 0
         else:
             s = info[2].split(":")
             note = s[0]
-            if len(s[1]) == 1:
-                mod = s[1]
+            if len(s) == 1:
+                mod = "maj"
             else:
-                if s[1][0] == "7" or s[1][0] == "9":
-                    mod = modificationDict[s[1][0]]
+                if len(s[1]) == 1:
+                    mod = s[1]
                 else:
-                    mod = s[1][:3]
-            if modificationDict[mod] == "N":
+                    if s[1][0] == "7" or s[1][0] == "9":
+                        mod = modificationDict[s[1][0]]
+                    else:
+                        mod = s[1][:3]
+            if modificationDict.get(mod,"maj") == "N":
                 newString = "N"
             else:
-                newString = s[0] + modificationDict[mod]
+                s[0] = s[0].split("/")[0]
+                newString = s[0] + modificationDict.get(mod,"maj")
             category = stringToIndex[newString]
             #print("parsed ", newString)
             #print("category ", category)
@@ -663,3 +859,5 @@ def stackNFeatures(originalFeatureVec, N):
             placeRight = originalFeatureVec.shape[1]*(1+i)
             toReturn[:,placeLeft:placeRight] = paddedZeros[i:i+originalFeatureVec.shape[0], :] 
     return toReturn
+
+

@@ -15,7 +15,7 @@ import ast
 
 
 #PARSER 
-possibleModes = ["justBeat", "justChord", "simpleJoint", "complexJoint", "conv"]
+possibleModes = ["justBeat", "justChord", "simpleJoint", "complexJoint", "conv", "crf"]
 parser = argparse.ArgumentParser()
 #mode tells us which model type we should be using and which features/targets
 parser.add_argument("mode")
@@ -53,10 +53,16 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("device is ", DEVICE)
 
 listOfSongsInOrder = [i for i in range(1,101) if ('0'*(3-len(str(i))) + str(i)) not in weirdTimes]
+beatlesSongsInOrder = [i for i in range(1,181)]
 #listOfSongsInOrder = listOfSongsInOrder[:10]
 print("length of songsInOrder ", len(listOfSongsInOrder))
 
-
+#targetFolder = "../Features/mel128ChromaCQTWithTargets"
+if mode == "justBeat":
+    targetFolder = featureFolder
+else:
+    targetFolder = "../Features/ChordTargets10FPS"
+    targetFolderBeatles = "../Features/BeatlesCQT3at10FPS"
 
 #LOSS FUNCTIONS
 loss_functions = []
@@ -71,16 +77,20 @@ if torch.cuda.is_available:
         func.cuda()
 
 #GET NUMFEATURES
-if mode == "conv": #i think we just don't care for this but whatever
-    featureTemp, dontNeed1, dontNeed2 = createFeaturesAndTargets(featureFolder, 1, chord_ground_truth, beat_ground_truth, "../Features/mel128ChromaCQTWithTargets", mode="conv")
+if mode == "conv" or mode == "crf": #i think we just don't care for this but whatever
+    featureTemp, dontNeed1, dontNeed2 = createFeaturesAndTargets(featureFolder, 1, chord_ground_truth, beat_ground_truth, targetFolder, mode="conv")
 else:
-    featureTemp, dontNeed1, dontNeed2 = createFeaturesAndTargets(featureFolder, 1, chord_ground_truth, beat_ground_truth, featureFolder)
+    featureTemp, dontNeed1, dontNeed2 = createFeaturesAndTargets(featureFolder, 1, chord_ground_truth, beat_ground_truth, targetFolder)
+    featureTemp = featureTemp.view(featureTemp.shape[0],-1)
 numFeatures = featureTemp.shape[1]
 
 
 #FOR CROSS-FOLD VALIDATION ORGANIZATION
 allIndices = np.arange(0, len(listOfSongsInOrder))
 boundaryPoint = int(0.2*len(listOfSongsInOrder))+1
+allBeatlesIndices = np.arange(0,len(beatlesSongsInOrder))
+beatlesBoundaryPoint = int(0.2*len(beatlesSongsInOrder))+1
+
 
 
 def saveLossesToFile(k, losses, oldLosses, train):
@@ -103,30 +113,41 @@ def saveTorchModel(k, model):
 
 
 
-def runModel(evaluate, song, model, optimizer):
+def runModel(evaluate, song, model, optimizer, beatles=False):
     #this if statement only needed because we don't have targets saved in the conv feature folder
-    if mode == "conv":
-        features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, "../Features/mel128ChromaCQTWithTargets",mode="conv")
+    if beatles:
+        ff = "../Features/BeatlesCQT3at10FPS"
+        tf = "../Features/ChordTargets10FPSBeatles"
     else:
-        features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, featureFolder)
+        ff = featureFolder
+        tf = targetFolder
+    if mode == "conv" or mode == "crf":
+        features, targetsBeat, targetsChord = createFeaturesAndTargets(ff, song, chord_ground_truth, beat_ground_truth, tf,mode="conv")
+    else:
+        features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, targetFolder)
+        features = features.view(features.shape[0],-1)
 
     if not evaluate:
         optimizer.zero_grad()
     
     #RUN THE MODEL
-    tag = model(features)
-    
-    if mode == "justBeat":
-        targets = targetsBeat
-    elif mode == "justChord" or mode == "conv":
-        targets = targetsChord
-    elif mode == "simpleJoint":
-        targets = [targetsBeat, targetsChord]
-    elif mode == "complexJoint":
-        targets = [(targetsBeat==1).long(), targetsChord, (targetsBeat==2).long()]
+    if mode == "crf":
+        loss = model.neg_log_likelihood(features, targetsChord)
+        losses = [loss]
+    else:
+        tag = model(features)
+        
+        if mode == "justBeat":
+            targets = targetsBeat
+        elif mode == "justChord" or mode == "conv":
+            targets = targetsChord
+        elif mode == "simpleJoint":
+            targets = [targetsBeat, targetsChord]
+        elif mode == "complexJoint":
+            targets = [(targetsBeat==1).long(), targetsChord, (targetsBeat==2).long()]
 
-    losses = model.calculate_loss(loss_functions, tag, targets)
-    loss = losses[0]
+        losses = model.calculate_loss(loss_functions, tag, targets)
+        loss = losses[0]
     #print("ran the model and calculated loss")
     # loss = (loss_function_beat(beatTag, targetsBeat) + loss_function_chord(chordTag, targetsChord))/2.0
     if not evaluate:
@@ -147,6 +168,9 @@ for k in range(5):
 
     #OPTIMIZER
     #print("model parameters are ", list(model.parameters()))
+    # if mode == "crf":
+    #     optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=1e-4)
+    # else:
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     #ORGANIZATION THINGS 
@@ -155,9 +179,13 @@ for k in range(5):
     #we will train 5 total networks with different sets of test 
     indicesTest = allIndices[k*boundaryPoint:min((k+1)*boundaryPoint, len(allIndices))]
     indicesTraining = np.array([thing for thing in allIndices if thing not in indicesTest])
+    indicesBeatlesTest = allBeatlesIndices[k*beatlesBoundaryPoint:min((k+1)*beatlesBoundaryPoint, len(allBeatlesIndices))]
+    indicesBeatlesTraining = np.array([thing for thing in allBeatlesIndices if thing not in indicesBeatlesTest])
     print("Training indices are ", indicesTraining)
+    print("Training Beatles indices are ", indicesBeatlesTraining)
     #print("Training songs are ", listOfSongsInOrder[indicesTraining])
     print("Test indices are ", indicesTest)
+    print("Test Beatles indices are ", indicesBeatlesTest)
     #print("Test songs are ", listOfSongsInOrder[indicesTest])
     print("num training: ", len(indicesTraining))
     print("num testing: ", len(indicesTest))
@@ -174,7 +202,9 @@ for k in range(5):
 
             #LOSS FOR TRAINING
             print("on TRAINING songs: ")
-            choice = np.random.choice(indicesTraining, 20, replace=False)
+            choice = np.random.choice(indicesTraining, 15, replace=False)
+            #choiceBeatles = np.random.choice(indicesBeatlesTraining, 5, replace=False)
+            #losses = np.zeros((len(choice) + len(choiceBeatles), model.num_losses))
             losses = np.zeros((len(choice), model.num_losses))
             for j in range(len(choice)):
                 #for now save time with break
@@ -182,6 +212,12 @@ for k in range(5):
                 losses[j,:] = runModel(True, song, model, optimizer)
                 if j%5==0:
                     print("finished ", j)
+            # for j in range(len(choice),len(choice)+len(choiceBeatles)):
+            #     #for now save time with break
+            #     song = beatlesSongsInOrder[choiceBeatles[j-len(choice)]]
+            #     losses[j,:] = runModel(True, song, model, optimizer, beatles=True)
+            #     if j%5==0:
+            #         print("finished ", j)
             avgLoss = saveLossesToFile(k, losses,trainingLosses, True)
             print("avg training loss: ", avgLoss)
             timeTraining = time.time()
@@ -191,13 +227,23 @@ for k in range(5):
             #LOSS FOR TEST 
             #
             print("On TEST songs: ")
-            losses = np.zeros((len(indicesTest), model.num_losses))
-            for j in range(len(indicesTest)):
+            choice = np.random.choice(indicesTest, min(15,len(indicesTest)), replace=False)
+            #losses = np.zeros((len(indicesTest)+len(indicesBeatlesTest), model.num_losses))
+            losses = np.zeros((len(choice), model.num_losses))
+            #for j in range(len(indicesTest)):
+            for j in range(len(choice)):
                 #for now save time for break
-                song = listOfSongsInOrder[indicesTest[j]]
+                #song = listOfSongsInOrder[indicesTest[j]]
+                song = listOfSongsInOrder[choice[j]]
                 losses[j,:] = runModel(True, song, model, optimizer)
                 if j%5==0:
                     print("finished ", j)
+            # for j in range(len(indicesTest), len(indicesTest)+len(indicesBeatlesTest)):
+            #     #for now save time for break
+            #     song = beatlesSongsInOrder[indicesBeatlesTest[j-len(indicesTest)]]
+            #     losses[j,:] = runModel(True, song, model, optimizer, beatles=True)
+            #     if j%5==0:
+            #         print("finished ", j)
             newAvgLoss = saveLossesToFile(k, losses, testingLosses, False)
             print("avg test loss: ", newAvgLoss)
             #SEE IF WE IMPROVED OUR LOSS
@@ -217,11 +263,18 @@ for k in range(5):
         model.train()
         i = 0
         for j in range(len(indicesTraining)):
+        #for j in range(10):
             song = listOfSongsInOrder[indicesTraining[j]]
             dontNeed = runModel(False, song, model, optimizer) #just don't actually need to save it anywhere
             if i%5 == 0:
                 print(i)
             i+=1
+        # for j in range(len(indicesTraining),len(indicesTraining)+len(indicesBeatlesTraining)):
+        #     song = beatlesSongsInOrder[indicesBeatlesTraining[j-len(indicesTraining)]]
+        #     dontNeed = runModel(False, song, model, optimizer,beatles=True) #just don't actually need to save it anywhere
+        #     if i%5 == 0:
+        #         print(i)
+        #     i+=1
         
         print("done with epoch ", epoch)
         end = time.time()

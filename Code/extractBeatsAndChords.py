@@ -12,6 +12,7 @@ import madmom
 import argparse
 import ast
 
+includeBeatles = False
 #This will be universal as well. Refactoring was maybe not the best use of your time girl.... BUT IT WILL BE BEAUTIFUL #
 #So maybe you're only doing chords, or only beats, or both. It doesn't matter its allll good
 possibleModes = ["justBeat", "justChord", "simpleJoint", "complexJoint"]
@@ -47,6 +48,7 @@ weirdTimes = [6, 22, 28, 30, 34, 37, 38, 41, 43, 50, 57, 71, 76, 77, 95]
 
 listOfSongsInOrder = np.arange(1,101)
 listOfSongsInOrder = [i for i in listOfSongsInOrder if i not in weirdTimes]
+beatlesSongsInOrder = [i for i in range(1,181)]
 print("names are ", listOfSongsInOrder)
 
 featureTemp, dontNeed1, dontNeed2 = createFeaturesAndTargets(featureFolder, 1, chord_ground_truth, beat_ground_truth,"../Features/mel128ChromaCQTWithTargets")
@@ -54,12 +56,18 @@ numFeatures = featureTemp.shape[1]
 print("num features ", numFeatures)
 allIndices = np.arange(0, len(listOfSongsInOrder))
 boundaryPoint = int(0.2*len(listOfSongsInOrder))+1
+allBeatlesIndices = np.arange(0,len(beatlesSongsInOrder))
 testIndicesAll = [allIndices[k*boundaryPoint:min((k+1)*boundaryPoint, len(allIndices))] for k in range(5)]
-
-
+beatlesBoundaryPoint = int(0.2*len(beatlesSongsInOrder))+1
+testIndicesAllBeatles = [allBeatlesIndices[k*beatlesBoundaryPoint:min((k+1)*beatlesBoundaryPoint, len(allBeatlesIndices))] for k in range(5)]
+#targetFolder = "../Features/mel128ChromaCQTWithTargets" #
+targetFolder = "../Features/ChordTargets10FPS"
+targetFolder = featureFolder
+targetFolderBeatles = "../Features/ChordTargets10FPSBeatles"
+featureFolderBeatles = "../Features/BeatlesCQT3at10FPS"
 percentages = []
 fmeasures = []
-for i in range(3):
+for i in range(5):
     print("mode is ", mode)
     modelFile = modelFolder + "/k"+str(i)+"model.pth"
     with torch.no_grad():
@@ -70,11 +78,21 @@ for i in range(3):
             model.load_state_dict(torch.load(modelFile))
         print("model is ready")
     testIndices = testIndicesAll[i]
+    testIndicesBeatles = testIndicesAllBeatles[i]
+    if includeBeatles:
+        union = list(testIndices) + list(testIndicesBeatles)
+    else:
+        union = testIndices
     print("test indices: ", testIndices)
-    for j in testIndices:
-        song = listOfSongsInOrder[j]
-        print("song ", song)
-        features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, "../Features/mel128ChromaCQTWithTargets", mode=mode)
+    for j in range(len(union)):
+        if j >= len(testIndices):
+            song = beatlesSongsInOrder[testIndicesBeatles[j-len(testIndices)]]
+            print("song ", song)
+            features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolderBeatles, song, chord_ground_truth, beat_ground_truth, targetFolderBeatles, mode=mode)
+        else:
+            song = listOfSongsInOrder[testIndices[j]]
+            print("song ", song)
+            features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, targetFolder, mode=mode)
         print("time of features ", features.shape[0])
         print("time of targets ", targetsChord.shape[0])
         with torch.no_grad():
@@ -82,6 +100,8 @@ for i in range(3):
             if type(tag) == list:
                 for indexT in range(len(tag)):
                     tag[indexT] = tag[indexT].detach()
+            elif type(tag) == tuple: #for us this is only for crf
+                tag = tag[1]
             else:
                 tag = tag.detach()
         
@@ -93,10 +113,13 @@ for i in range(3):
             smBeat = softmax(tag).detach().cpu().numpy()
             smBeat = smBeat[:,1:]
             smChord = None
-        elif mode == "justChord" or mode == "conv":  
+        elif mode == "justChord" or mode == "conv":
             print("lord knows why we're in here, mode is ", mode)
             smBeat = None
             smChord = softmax(tag).detach().cpu().numpy()  #for now trying ###
+        if mode == "crf":
+            smBeat = None
+            smChord = np.array(tag)
         elif mode == "simpleJoint":
             smBeat = softmax(tag[0]).detach().cpu().numpy()
             smChord = softmax(tag[1]).detach().cpu().numpy()
@@ -111,7 +134,11 @@ for i in range(3):
 
         #CHORD
         if smChord is not None:
-            chordGuess = np.argmax(smChord, axis=1)
+            if mode == "crf":
+                chordGuess = smChord
+                print("shape of chordGuess ", chordGuess.shape)
+            else:
+                chordGuess = np.argmax(smChord, axis=1)
             diff = chordGuess - targetsChord
             numCorrect = list(diff).count(0)
             percentCorrect = numCorrect / float(targetsChord.shape[0])

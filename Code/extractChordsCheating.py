@@ -35,7 +35,8 @@ chord_ground_truth = bool(int(args.chord_ground_truth))
 beat_ground_truth = bool(int(args.beat_ground_truth))
 print("chord ground truth ", chord_ground_truth)
 print("beat ground truth ", beat_ground_truth)
-
+#targetFolder = "../Features/mel128ChromaCQTWithTargets"
+targetFolder = "../Features/ChordTargets10FPS"
 assert(not os.path.exists(toSaveFolder)) #we're gonna try to ensure no overwriting files
 os.makedirs(toSaveFolder)
 text_file = open(toSaveFolder+"/README.txt", "w")
@@ -49,7 +50,7 @@ listOfSongsInOrder = np.arange(1,101)
 listOfSongsInOrder = [i for i in listOfSongsInOrder if i not in weirdTimes]
 print("names are ", listOfSongsInOrder)
 
-featureTemp, dontNeed1, dontNeed2 = createFeaturesAndTargets(featureFolder, 1, chord_ground_truth, beat_ground_truth,"../Features/mel128ChromaCQTWithTargets")
+featureTemp, dontNeed1, dontNeed2 = createFeaturesAndTargets(featureFolder, 1, chord_ground_truth, beat_ground_truth,targetFolder)
 numFeatures = featureTemp.shape[1]
 print("num features ", numFeatures)
 allIndices = np.arange(0, len(listOfSongsInOrder))
@@ -73,7 +74,7 @@ for i in range(5):
     for j in testIndices:
         song = listOfSongsInOrder[j]
         print("song ", song)
-        features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, "../Features/mel128ChromaCQTWithTargets", mode=mode)
+        features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, targetFolder, mode=mode)
         targetsBeat = targetsBeat.cpu().numpy()
         print("time of features ", features.shape[0])
         print("time of targets ", targetsChord.shape[0])
