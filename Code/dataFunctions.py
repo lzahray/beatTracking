@@ -630,10 +630,12 @@ class LSTMMulticlass4(nn.Module):
 #         return tag_space
 
 def createModel(mode, numFeatures, hyper_parameters):
+    if mode == "weMessedUp":
+        model = LSTMAny(numFeatures, 75, hyper_parameters).to(DEVICE)
     if mode == "justBeat": 
         #just for now
-        #model = LSTMAny(numFeatures, 3, hyper_parameters ).to(DEVICE)
-        model = LSTMAny3(numFeatures, 3, hyper_parameters ).to(DEVICE)
+        model = LSTMAny(numFeatures, 3, hyper_parameters ).to(DEVICE)
+        #model = LSTMAny3(numFeatures, 3, hyper_parameters ).to(DEVICE)
     elif mode == "justChord":
         model = LSTMAny(numFeatures, 25, hyper_parameters ).to(DEVICE)
     elif mode == "simpleJoint":
@@ -647,7 +649,8 @@ def createModel(mode, numFeatures, hyper_parameters):
     return model
 
 def createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, targetFolder, mode=None):
-    features = torch.from_numpy(np.load(featureFolder+"/"+str(song)+"features.npy")).float().to(DEVICE)
+    #features = torch.from_numpy(np.load(featureFolder+"/"+str(song)+"features.npy")).float().to(DEVICE)
+    features = torch.from_numpy(np.load(featureFolder+"/"+str(song)+".npy")).float().to(DEVICE)
     targetsBeat = torch.from_numpy(np.load(targetFolder+"/"+str(song)+"beatTargets.npy")).long().to(DEVICE)
     targetsChord = torch.from_numpy(np.load(targetFolder+"/"+str(song)+"chordTargets.npy")).long().to(DEVICE)
     
@@ -786,10 +789,48 @@ def getMoreFeaturesAndGroundTruthDownbeats(featureFolder, answerFolder, getChord
             else:
                 featuresAndGT.append((torch.from_numpy(features).to(DEVICE).float(), torch.from_numpy(target).to(DEVICE).long()))          
     return featuresAndGT
+
+def getGroundTruthDownbeats(numFrames, songIndex, answerFolder):
+    #this is specifically for my beatles adventure right now 
+    fs = 44100
+    hopSize = 441
+    featuresAndGT = []
+    files = [answerFolder+"/"+file for file in sorted(os.listdir(answerFolder)) if file[-3:]=="txt"]
+    #print("found ", len(files), " files")
+    #answerFile = open(files[songNumber-1])
+    #print("file name is ", files[songNumber-1])
+    answerFile = open(files[songIndex],"r")
+    beatTimes = []
+    downbeatTimes = []
+    for line in answerFile.readlines():
+        line = line.strip()
+        lineElements = line.split()
+        print("lineElements ", lineElements)
+        beatTimes.append(lineElements[0]) 
+        if lineElements[1] == '1':
+            downbeatTimes.append(lineElements[0])
+    answerFile.close()
+    #Get beatTimes in seconds (in file they're in 10ms)
+    beatTimes = np.array(beatTimes).astype(float) 
+    downbeatTimes = np.array(downbeatTimes).astype(float) 
+    #Turn seconds into feature frames
+    beatFrames = beatTimes * fs / hopSize
+    downbeatFrames = downbeatTimes * fs / hopSize
+    beatFrames = np.rint(beatFrames).astype(int)
+    downbeatFrames = np.rint(downbeatFrames).astype(int)
+    #using beatFrames, get target vector of 1s and 0s
+    target = np.zeros(numFrames)
+    target[beatFrames] = 1
+    target[downbeatFrames] = 2
+    #print("num downbeats is ", list(target).count(2))
+    #print("num beats is ",list(target).count(1) )
+    #plt.plot(target)
+    #plt.show()
+    return target
     #ok forget about batches for now, really not a priority    
 
 #screw it, this function will get a single chord for the song specified 
-def getGroundTruthChords(numFrames, songNumber, answerFolder, hopSize = 441):
+def getGroundTruthChords(numFrames, songIndex, answerFolder, hopSize = 441):
     #features are just being passed in so we know the length of the song which sounds dumb but... well too late
     #print("in the func")
     fs = 44100
@@ -804,9 +845,12 @@ def getGroundTruthChords(numFrames, songNumber, answerFolder, hopSize = 441):
             stringToIndex[note+"maj"] = number+1
         number += 2
     files = [answerFolder+"/"+file for file in sorted(os.listdir(answerFolder)) if file[-3:]=="lab"]
-    print("found ", len(files), " files")
-    answerFile = open(files[songNumber-1])
-    print("file name is ", files[songNumber-1])
+    #print("found ", len(files), " files")
+    #answerFile = open(files[songNumber-1])
+    #print("file name is ", files[songNumber-1])
+    answerFile = open(files[songIndex])
+    print("answer file name ", files[songIndex])
+
     chordGT = np.zeros(numFrames)
     lines = answerFile.readlines()
     print("found ", len(lines), " lines")
@@ -844,8 +888,8 @@ def getGroundTruthChords(numFrames, songNumber, answerFolder, hopSize = 441):
         # print("start frame: ", startFrame)
         # print("end frame ", endFrame)
         chordGT[startFrame:min(endFrame+1, chordGT.shape[0])] = category
-    # plt.plot(np.arange(numFrames), chordGT)
-    # plt.show()
+    #plt.plot(np.arange(numFrames), chordGT)
+    #plt.show()
     return chordGT
 
 

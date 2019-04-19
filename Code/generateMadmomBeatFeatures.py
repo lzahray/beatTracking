@@ -1,5 +1,5 @@
 import numpy as np 
-from dataFunctions import getGroundTruthChords, getMoreFeaturesAndGroundTruthDownbeats
+from dataFunctions import getGroundTruthChords, getMoreFeaturesAndGroundTruthDownbeats, getGroundTruthDownbeats
 import os
 #this is a lie what it's really doing for now is making chord target files yo 
 
@@ -25,15 +25,32 @@ import os
 #     np.save("../Features/ChordTargets10FPSBeatles/"+str(song)+"beatTargets.npy", np.zeros(5)) #
 
 #answerFolder = "/n/sd1/music/Beatles/annotation/chordlab"#
-answerFolder = "../../chordlab/TheBeatles"
-subAnswerFolders = [answerFolder+"/"+f for f in sorted(os.listdir(answerFolder))]
-featureRefFolder = "../Features/BeatlesCQT3at10FPS"
-j = 1
-for subFolder in subAnswerFolders:
-    validFiles = [subFolder+"/"+file for file in sorted(os.listdir(subFolder)) if file[-3:]=="lab"]
-    for i in range(1, len(validFiles)+1):
-        numFrames = np.load(featureRefFolder+"/"+str(j)+"features.npy").shape[0]
-        gt = getGroundTruthChords(numFrames, i, subFolder, hopSize = 4410)
-        np.save("../Features/ChordTargets10FPSBeatles/"+str(j)+"chordTargets.npy", gt)
-        np.save("../Features/ChordTargets10FPSBeatles/"+str(j)+"beatTargets.npy", np.zeros(5))
-        j+=1
+
+#TODO: Get ground truth beats and fix file names 
+#Then we need to actually run stuff on the beatles songs and pray that it does well
+#If it does we're happy people! If it doesn't we're sad people
+#TIME BUDGET: 2 hours. 1 hour for getting ground truth, 1 hour for running it. 
+#While running it we're gonna edit the text of the paper 
+#MAKE YOSHII PROUD LETS GO
+answerFolder = "../../Downloads/The Beatles Annotations/chordlab/The Beatles"
+answerFolderBeats = "../../Downloads/The Beatles Annotations/beat/The Beatles"
+subAnswerFolders = [answerFolder+"/"+f for f in sorted(os.listdir(answerFolder))][1:]
+subAnswerFolderBeats = [answerFolderBeats+"/"+f for f in sorted(os.listdir(answerFolderBeats))][1:]
+print("sub ",subAnswerFolderBeats)
+albumNumbers = ["01","02","03","04","05","06","07","08","09","10-1","10-2","11","12"]
+featureRefFolder = "../Features/Beatles"
+for s in range(len(subAnswerFolderBeats)):
+	subFolder = subAnswerFolderBeats[s]
+	print("\nSUBFOLDER ", subFolder)
+	validFiles = [subFolder+"/"+file for file in sorted(os.listdir(subFolder)) if file[-3:]=="txt"]
+	print("\nvalid Files ", validFiles)
+	songNumbers = [file[0:2] for file in sorted(os.listdir(subFolder)) if file[-3:]=="txt"]
+	for i in range(len(validFiles)):
+		fileID = albumNumbers[s]+"-"+songNumbers[i]
+		print("FileID:", fileID)
+		numFrames = np.load(featureRefFolder+"/"+fileID+".npy").shape[0]
+		#gt = getGroundTruthChords(numFrames, i, subFolder)
+		gtBeats = getGroundTruthDownbeats(numFrames, i, subFolder)
+		print("saving to file ", "../Features/BeatlesTargets/"+fileID+"beatTargets.npy")
+		#np.save("../Features/BeatlesTargets/"+fileID+"chordTargets.npy", gt)
+		np.save("../Features/BeatlesTargets/"+fileID+"beatTargets.npy", gtBeats)

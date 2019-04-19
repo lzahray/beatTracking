@@ -38,9 +38,12 @@ def melFromFreq(freq):
 #maybe 72 is weird?
 weirdTimes = ['006', '022', '028', '030', '034', '037', '038', '041',  '043', '050', '057', '071', '076', '077', '095']
 toSave = "../Features/mel128ChromaCQT/"
+toSave = "../Features/Beatles/"
 #folders where audio and beat annotations are located 
 audioFolder = "/n/sd1/music/RWC-MDB/P/wav"
 answerFolder = "../../../Downloads/AIST.RWC-MDB-P-2001.BEAT"
+audioFolder = "../../44100s"
+answerFolder = "../../Downloads/The Beatles Annotations/beat/The Beatles"
 
 #print the sound file names (test)
 print("list: ", os.listdir(audioFolder))
@@ -50,18 +53,21 @@ sizes = [2048]
 hopSize = int(44100/100)
 
 #now we loop through each song 
+
 for filename in os.listdir(audioFolder):
     #get record of song's number label
-    number = filename[4:7]
-    print("number ", number)
+    album, number = (filename[0:2], filename[3:5])
+    print("album-number  ", album,"-",number)
+    if album == "10":
+        album, number = (filename[0:4],filename[5:7])
 
     #Skip the readme
     if filename == "README":
         continue
     #ignore weird time signatures
-    if number in weirdTimes:
-        print(number, "is weird")
-        continue
+    #if number in weirdTimes:
+    #    print(number, "is weird")
+    #    continue
 
     #load the song using librosa
     x, fs = librosa.load(audioFolder + '/' + filename, sr=None)
@@ -113,7 +119,7 @@ for filename in os.listdir(audioFolder):
 
         featureMatrix = np.concatenate((chroma_cqt,mel), axis=1)
         featureMatrix = stackNFeatures(featureMatrix,11)
-        #np.save(toSave+"RM-P"+str(number),featureMatrix)
+        np.save(toSave+str(album)+"-"+str(number),featureMatrix)
 
 
 
