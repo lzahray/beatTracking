@@ -13,6 +13,9 @@ weirdTimes = ['006', '022', '028', '030', '034', '037', '038', '041',  '043', '0
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("device in data functions is ", DEVICE)
+toSaveImages = "../intermediateSavedForPictures/"
+lstmCount = 0
+names = ["left.npy", "right.npy"]
 class LSTMAny(nn.Module):
     def __init__(self, feature_dim, tagset_size, hyper_parameters):
         #can have any number of layers but they need to have the same hidden size which for now is fine 
@@ -44,12 +47,50 @@ class LSTMAny(nn.Module):
         loss_function = loss_functions[0]
         loss = loss_function(tag, targets)
         return [loss]
+class LSTMAnyTempForImage(nn.Module):
+    def __init__(self, feature_dim, tagset_size, hyper_parameters, name):
+        #can have any number of layers but they need to have the same hidden size which for now is fine 
+        super(LSTMAnyTempForImage, self).__init__()
+        self.hidden_dim = hyper_parameters["hidden_dim"]
+        self.feature_dim = feature_dim
+        self.num_layers = 2
+        self.tagset_size = tagset_size
+        self.name = name
+        #sometimes we've had dropout but I think not for most times that worked
+        self.lstm1 = nn.LSTM(feature_dim, self.hidden_dim, num_layers = 1, bidirectional=True)
+        self.lstm2 = nn.LSTM(self.hidden_dim*2, self.hidden_dim, num_layers = 1, bidirectional=True)
+        self.hidden2tag = nn.Linear(self.hidden_dim*2, tagset_size)
+        self.init_hidden()
+        self.num_losses = 1
+    
+    def init_hidden(self):
+        self.hidden1 = (torch.zeros(2, 1, self.hidden_dim, device=DEVICE), torch.zeros(2, 1, self.hidden_dim, device=DEVICE))
+        self.hidden2 = (torch.zeros(2, 1, self.hidden_dim, device=DEVICE), torch.zeros(2, 1, self.hidden_dim, device=DEVICE))
+    def forward(self, mfcc):
+        self.init_hidden()
+        lstm_out1, self.hidden1 = self.lstm1(mfcc.view(mfcc.shape[0], 1, mfcc.shape[1]), self.hidden1)
+        np.save(toSaveImages+self.name, lstm_out1)
+        lstm_out2, self.hidden2 = self.lstm2(lstm_out1, self.hidden2)
+        tag_space = self.hidden2tag(lstm_out2.view(mfcc.shape[0], -1))
+
+        # tag_scores = F.softmax(tag_space, dim=1)
+
+        return tag_space
+    
+    def calculate_loss(self, loss_functions, tag, targets ):
+        loss_function = loss_functions[0]
+        loss = loss_function(tag, targets)
+        return [loss]
 
 #yeah we'll have to make sure this works.....
 class LSTMSimpleJoint(nn.Module):
     def __init__(self, feature_dim, tagset_sizes, hyper_parameters):
         #can have any number of layers but they need to have the same hidden size which for now is fine 
         super(LSTMSimpleJoint, self).__init__()
+        print("hyper parameters ", hyper_parameters)
+        print("output mod 1 ", hyper_parameters["output_model1"])
+        print("hidden dim 1 ", hyper_parameters["hidden_dim_model1"])
+        print("num layers 1 ", hyper_parameters["num_layers_model1"])
         self.model1 = LSTMAny(feature_dim, hyper_parameters["output_model1"], {"hidden_dim":hyper_parameters["hidden_dim_model1"], "num_layers": hyper_parameters["num_layers_model1"]}).to(DEVICE)
         self.model1.init_hidden()
         self.modelLeft = LSTMAny(hyper_parameters["output_model1"], tagset_sizes["left"], {"hidden_dim":hyper_parameters["hidden_dim_modelLeft"], "num_layers": hyper_parameters["num_layers_modelLeft"]}).to(DEVICE)
@@ -61,6 +102,39 @@ class LSTMSimpleJoint(nn.Module):
     def forward(self, features):
         #hidden will already be inited in the forward of each dude
         intermediate = self.model1(features)
+        leftTag = self.modelLeft(intermediate)
+        rightTag = self.modelRight(intermediate)
+        return [leftTag, rightTag]
+    
+    def calculate_loss(self, loss_functions, tag, targets):
+        leftTag, rightTag = tag
+        leftTargets, rightTargets = targets
+        loss_function_left, loss_function_right = loss_functions
+        loss_left = loss_function_left(leftTag, leftTargets)
+        loss_right = loss_function_right(rightTag, rightTargets)
+        loss = 0.5 * loss_left + 0.5 * loss_right
+        return [loss, loss_left, loss_right]
+class LSTMSimpleJointTempForImage(nn.Module):
+    def __init__(self, feature_dim, tagset_sizes, hyper_parameters):
+        #can have any number of layers but they need to have the same hidden size which for now is fine 
+        super(LSTMSimpleJointTempForImage, self).__init__()
+        print("hyper parameters ", hyper_parameters)
+        print("output mod 1 ", hyper_parameters["output_model1"])
+        print("hidden dim 1 ", hyper_parameters["hidden_dim_model1"])
+        print("num layers 1 ", hyper_parameters["num_layers_model1"])
+        self.model1 = LSTMAny(feature_dim, hyper_parameters["output_model1"], {"hidden_dim":hyper_parameters["hidden_dim_model1"], "num_layers": hyper_parameters["num_layers_model1"]}).to(DEVICE)
+        self.model1.init_hidden()
+        self.modelLeft = LSTMAnyTempForImage(hyper_parameters["output_model1"], tagset_sizes["left"], {"hidden_dim":hyper_parameters["hidden_dim_modelLeft"], "num_layers": 2},"left.npy").to(DEVICE)
+        self.modelLeft.init_hidden()
+        self.modelRight = LSTMAnyTempForImage(hyper_parameters["output_model1"], tagset_sizes["right"], {"hidden_dim":hyper_parameters["hidden_dim_modelRight"], "num_layers": 1},"right.npy").to(DEVICE)
+        self.modelRight.init_hidden()
+        self.num_losses = 3
+
+    def forward(self, features):
+        #hidden will already be inited in the forward of each dude
+        intermediate = self.model1(features)
+        print("about to save intermediate to ", toSaveImages+"intermediate.npy")
+        np.save(toSaveImages+"intermediate.npy",intermediate) 
         leftTag = self.modelLeft(intermediate)
         rightTag = self.modelRight(intermediate)
         return [leftTag, rightTag]
@@ -381,34 +455,22 @@ class LSTMAny3(nn.Module):
         #can have any number of layers but they need to have the same hidden size which for now is fine 
         super(LSTMAny3, self).__init__()
         self.hidden_dim = hyper_parameters["hidden_dims"]
+        self.output_model1 = hyper_parameters.get("output_model1",self.hidden_dim[0])
+        print("output 1 is ", self.output_model1)
         assert(len(self.hidden_dim) == 3)
         self.feature_dim = feature_dim
         self.num_layers = hyper_parameters["num_layers"]
         assert(self.num_layers == 3)
         self.tagset_size = tagset_size
-        self.lstm1 = nn.LSTM(feature_dim, self.hidden_dim[0], num_layers = 1, bidirectional=True)
-        self.lstm2 = nn.LSTM(self.hidden_dim[0]*2, self.hidden_dim[1], num_layers = 1, bidirectional=True)
-        self.lstm3 = nn.LSTM(self.hidden_dim[1]*2, self.hidden_dim[2], num_layers = 1, bidirectional=True)
-        self.hidden2tag = nn.Linear(self.hidden_dim[2]*2, tagset_size)
-        self.init_hidden()
+        self.lstm1 = LSTMAny(feature_dim, self.output_model1, {"num_layers":1, "hidden_dim":self.hidden_dim[0]})
+        self.lstm2 = LSTMAny(self.output_model1, tagset_size, {"num_layers": 2, "hidden_dim":self.hidden_dim[1]})
         self.num_losses = 1
     
-    def init_hidden(self):
-        self.hidden1 = (torch.zeros(2*1, 1, self.hidden_dim[0], device=DEVICE), torch.zeros(2*1, 1, self.hidden_dim[0], device=DEVICE))
-        self.hidden2 = (torch.zeros(2*1, 1, self.hidden_dim[1], device=DEVICE), torch.zeros(2*1, 1, self.hidden_dim[1], device=DEVICE))
-        self.hidden3 = (torch.zeros(2*1, 1, self.hidden_dim[2], device=DEVICE), torch.zeros(2*1, 1, self.hidden_dim[2], device=DEVICE))
-
     def forward(self, features):
-        self.init_hidden()
-        lstm_out1, self.hidden1 = self.lstm1(features.view(features.shape[0], 1, features.shape[1]), self.hidden1)
+        lstm_out1 = self.lstm1(features)
         #print("shape of hidden is ", self.hidden1[0].shape)
-        #print("lstm_out1 shape is ", lstm_out1.shape)
         #out1 = self.between12(lstm_out1)
-        lstm_out2, self.hidden2 = self.lstm2(lstm_out1, self.hidden2)
-        #print("lstm_out2 shape is ", lstm_out2.shape)
-        lstm_out3, self.hidden3 = self.lstm3(lstm_out2, self.hidden3)
-        #print("lstm_out3 shape is ", lstm_out3.shape)
-        tag_space = self.hidden2tag(lstm_out3.view(lstm_out3.shape[0], -1))
+        tag_space = self.lstm2(lstm_out1)
 
         # tag_scores = F.softmax(tag_space, dim=1)
 
@@ -632,12 +694,14 @@ class LSTMMulticlass4(nn.Module):
 def createModel(mode, numFeatures, hyper_parameters):
     if mode == "justBeat": 
         #just for now
-        #model = LSTMAny(numFeatures, 3, hyper_parameters ).to(DEVICE)
-        model = LSTMAny3(numFeatures, 3, hyper_parameters ).to(DEVICE)
+        model = LSTMAny(numFeatures, 3, hyper_parameters ).to(DEVICE)
+        #model = LSTMAny3(numFeatures, 3, hyper_parameters ).to(DEVICE)
     elif mode == "justChord":
         model = LSTMAny(numFeatures, 25, hyper_parameters ).to(DEVICE)
     elif mode == "simpleJoint":
         model = LSTMSimpleJoint(numFeatures, {"left":3,"right":25}, hyper_parameters).to(DEVICE)
+    elif mode == "simpleJointTempForImages":
+        model = LSTMSimpleJointTempForImage(numFeatures, {"left":3,"right":25}, hyper_parameters).to(DEVICE)
     elif mode == "complexJoint":
         model = LSTMComplexJoint(numFeatures, {"left":2, "center": 25, "right": 2}, hyper_parameters).to(DEVICE)
     elif mode == "conv":
@@ -751,7 +815,8 @@ def getMoreFeaturesAndGroundTruthDownbeats(featureFolder, answerFolder, getChord
         rangeNum = [1,101] 
     for i in range(rangeNum[0],rangeNum[1]):
         numberString = '0'*(3-len(str(i))) + str(i)
-        if numberString not in weirdTimes:
+        if True: #lisa october edit for all features 
+        #if numberString not in weirdTimes:
             features = np.load(featureFolder + "/RM-P" + numberString + '.npy')
             beatTimes = []
             downbeatTimes = []
@@ -813,8 +878,8 @@ def getGroundTruthChords(numFrames, songNumber, answerFolder, hopSize = 441):
     answerFile.close()
     #print("num lines is ", len(lines))
     for line in lines:
-        #info = line.strip().split("\t")
-        info = line.strip().split(" ")
+        info = line.strip().split("\t")
+        #info = line.strip().split(" ")
         #print("info is ", info)
         if info[2] == "N":
             category = 0

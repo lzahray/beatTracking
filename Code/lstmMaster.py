@@ -12,7 +12,7 @@ import argparse
 import time
 import ast
 
-
+#hello test
 
 #PARSER 
 possibleModes = ["justBeat", "justChord", "simpleJoint", "complexJoint", "conv", "crf"]
@@ -159,7 +159,7 @@ def runModel(evaluate, song, model, optimizer, beatles=False):
 
 
 #TRAINING SECTION (for each cross-validation partition k)
-for k in range(5):
+for k in range(3,5):
     print("starting at k= ", k)
 
     #INSTANTIATE MODEL
@@ -203,6 +203,7 @@ for k in range(5):
             #LOSS FOR TRAINING
             print("on TRAINING songs: ")
             choice = np.random.choice(indicesTraining, 15, replace=False)
+            #choice = indicesTraining
             #choiceBeatles = np.random.choice(indicesBeatlesTraining, 5, replace=False)
             #losses = np.zeros((len(choice) + len(choiceBeatles), model.num_losses))
             losses = np.zeros((len(choice), model.num_losses))

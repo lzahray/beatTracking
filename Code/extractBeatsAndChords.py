@@ -11,7 +11,7 @@ from dataFunctions import *
 import madmom
 import argparse
 import ast
-
+from functionsForHMM import *
 includeBeatles = False
 #This will be universal as well. Refactoring was maybe not the best use of your time girl.... BUT IT WILL BE BEAUTIFUL #
 #So maybe you're only doing chords, or only beats, or both. It doesn't matter its allll good
@@ -29,6 +29,8 @@ parser.add_argument("beat_ground_truth")
 args = parser.parse_args()
 mode = args.mode
 hyper_parameters = ast.literal_eval(args.hyper_parameters)
+if type(hyper_parameters) == tuple: 
+    hyper_parameters = hyper_parameters[0]
 featureFolder = args.feature_folder
 toSaveFolder = args.to_save_folder
 modelFolder = args.model_folder
@@ -67,34 +69,65 @@ targetFolderBeatles = "../Features/ChordTargets10FPSBeatles"
 featureFolderBeatles = "../Features/BeatlesCQT3at10FPS"
 percentages = []
 fmeasures = []
-for i in range(5):
+songsForFigure = [2, 5, 8, 10, 11, 13, 21, 27, 32, 48, 52, 55, 56, 58, 59, 60]
+for i in range(3):
     print("mode is ", mode)
     modelFile = modelFolder + "/k"+str(i)+"model.pth"
+    #model1File = modelFolder + "/k"+str(i)+"model1.pth"
+    #modelBeatFile = modelFolder + "/k"+str(i)+"modelBeat.pth"
+    #modelChordFile = modelFolder + "/k"+str(i)+"modelChord.pth"
     with torch.no_grad():
+        
         model = createModel(mode, numFeatures, hyper_parameters)
+        #model.modelLeft.load_state_dict(torch.load(modelBeatFile))
+        #model.model1.load_state_dict(torch.load(model1File))
+        #model.modelRight.load_state_dict(torch.load(modelChordFile))
         if DEVICE == 'cpu':
             model.load_state_dict(torch.load(modelFile, map_location="cpu"))
         else:
             model.load_state_dict(torch.load(modelFile))
         print("model is ready")
+    #lisa is adding this for now to test on all 100 songs
     testIndices = testIndicesAll[i]
+    #if i == 0:
+    #    testIndices += weirdTimes
     testIndicesBeatles = testIndicesAllBeatles[i]
     if includeBeatles:
         union = list(testIndices) + list(testIndicesBeatles)
     else:
-        union = testIndices
+        if False:
+            union = list(testIndices) + list(weirdTimes)
+        else:
+            union = testIndices
     print("test indices: ", testIndices)
-    for j in range(len(union)):
+    #for j in range(len(testIndices),len(union)):
+    for j in range(len(testIndices)):
         if j >= len(testIndices):
             song = beatlesSongsInOrder[testIndicesBeatles[j-len(testIndices)]]
-            print("song ", song)
+            #song = union[j]
+            print("we shouldnt be here song ", song)
             features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolderBeatles, song, chord_ground_truth, beat_ground_truth, targetFolderBeatles, mode=mode)
         else:
             song = listOfSongsInOrder[testIndices[j]]
+            #if song not in songsForFigure:
+             #   continue
             print("song ", song)
-            features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, targetFolder, mode=mode)
+        features, targetsBeat, targetsChord = createFeaturesAndTargets(featureFolder, song, chord_ground_truth, beat_ground_truth, targetFolder, mode=mode)
         print("time of features ", features.shape[0])
         print("time of targets ", targetsChord.shape[0])
+        
+        #FOR NOW 
+        #chordGuess = np.load("../Results/JointSimpleB/Guesses/chordGuess"+str(song)+".npy")
+        #diff = chordGuess - targetsChord
+        #numCorrect = list(diff).count(0)
+        #percentCorrect = numCorrect / float(targetsChord.shape[0])
+        #print("num correct = ", numCorrect)
+        #print("percentage correct = ",percentCorrect)
+        #percentages.append(percentCorrect)
+            #np.save(toSaveFolder+"/chordGuess"+str(song), chordGuess)
+        #np.save(toSaveFolder+"/Percentages", percentages)
+        #continue
+
         with torch.no_grad():
             tag = model(features)
             if type(tag) == list:
@@ -122,6 +155,7 @@ for i in range(5):
             smChord = np.array(tag)
         elif mode == "simpleJoint":
             smBeat = softmax(tag[0]).detach().cpu().numpy()
+            smBeat = smBeat[:,1:] #I just added this in Lisa 10/21/2018
             smChord = softmax(tag[1]).detach().cpu().numpy()
         elif mode == "complexJoint":
             ##for now because we're tired, hardcode to just always do sigmoid for left and right (beat and downbeat), softmax for chord
@@ -133,12 +167,24 @@ for i in range(5):
         
 
         #CHORD
+        #FOR NOW, for saving text files
+        #saveSoftmaxToFile(song, smChord,"../ChordSoftmaxTextFiles/simpleJoint")
+        
+        #FOR NOW, for saving framewise softmaxes to numpy for newest figure
+        #np.save(toSaveFolder+"/smChord"+str(song)+".npy", smChord)
+        #np.save(toSaveFolder+"/smBeat"+str(song)+".npy", smBeat)
+        print("finished text of ", song)
+        #continue
+
         if smChord is not None:
             if mode == "crf":
                 chordGuess = smChord
                 print("shape of chordGuess ", chordGuess.shape)
             else:
                 chordGuess = np.argmax(smChord, axis=1)
+            
+            #FORNOW using HMM
+            #chordGuess = getGuessFromFile("../ChordSoftmaxTextFiles/simpleJointResults/simpleJoint"+str(song)+".txt")
             diff = chordGuess - targetsChord
             numCorrect = list(diff).count(0)
             percentCorrect = numCorrect / float(targetsChord.shape[0])
@@ -146,17 +192,21 @@ for i in range(5):
             print("percentage correct = ",percentCorrect)
             percentages.append(percentCorrect)
             np.save(toSaveFolder+"/chordGuess"+str(song), chordGuess)
-            np.save(toSaveFolder+"/Percentages", percentages)
+            #np.save(toSaveFolder+"/Percentages", percentages)
 
         #BEATS
+        #continue
         if smBeat is not None:
-            proc = madmom.features.downbeats.DBNDownBeatTrackingProcessor(4, fps=100)
+            proc = madmom.features.downbeats.DBNDownBeatTrackingProcessor([3,4], fps=100)
             baf = smBeat
             #print("baf is ", baf.shape)
-            #print("row 102 is ", baf[102])
+            #print("small section is  ", baf[100:120,:])
             #print("ran madmom")
             #beatInfo = proc(baf)
             beatInfo = proc.process(baf)
+            #np.save(toSaveFolder+"/beatGuess"+str(song),beatInfo)
+            #EVERYTHING is for now because we're saving particular stuff
+            #continue
             #print("beats ", beatInfo[:6,:])
             #print("other beats ", otherBeatInfo[:6,:])
             #prep targets (get times in seconds of first just beats, then downbeats)
@@ -184,8 +234,13 @@ for i in range(5):
             for line in range(beatInfo.shape[0]):
                 text_file.write(str(beatInfo[line,0]) + "\t" + str(int(beatInfo[line,1])) + "\n")
             text_file.close()
-
-
+#fme = np.load(toSaveFolder+"/fmeasures.npy")
+#for f in fme[:,0]:
+#    print(f)
+#for f in fme[:,1]:
+#    print(f)
+#for c in np.load(toSaveFolder+"/Percentages.npy"):
+#    print(c)
 # plt.plot(np.arange(chordGuess.shape[0]), chordGuess)
 # plt.plot(np.arange(chordGuess.shape[0]), chordTarget)
 #plt.plot(np.arange(chordGuess.shape[0]), chordGuess-chordTarget)

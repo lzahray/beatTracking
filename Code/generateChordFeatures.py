@@ -37,7 +37,7 @@ def melFromFreq(freq):
 #we don't want to consider the songs that have a weird time signature
 #maybe 72 is weird?
 weirdTimes = ['006', '022', '028', '030', '034', '037', '038', '041',  '043', '050', '057', '071', '076', '077', '095']
-toSave = "../Features/mel128ChromaCQT/"
+toSave = "../Features/mel128ChromaCQTAll/"
 #folders where audio and beat annotations are located 
 audioFolder = "/n/sd1/music/RWC-MDB/P/wav"
 answerFolder = "../../../Downloads/AIST.RWC-MDB-P-2001.BEAT"
@@ -59,9 +59,9 @@ for filename in os.listdir(audioFolder):
     if filename == "README":
         continue
     #ignore weird time signatures
-    if number in weirdTimes:
-        print(number, "is weird")
-        continue
+    #if number in weirdTimes:
+    #    print(number, "is weird")
+    #    continue
 
     #load the song using librosa
     x, fs = librosa.load(audioFolder + '/' + filename, sr=None)
@@ -113,8 +113,7 @@ for filename in os.listdir(audioFolder):
 
         featureMatrix = np.concatenate((chroma_cqt,mel), axis=1)
         featureMatrix = stackNFeatures(featureMatrix,11)
-        #np.save(toSave+"RM-P"+str(number),featureMatrix)
-
+        np.save(toSave+"RM-P"+str(number),featureMatrix)
 
 
 

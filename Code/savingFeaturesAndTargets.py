@@ -12,13 +12,17 @@ import argparse
 import time
 
 
-folderPath = "../Features/mel128ChromaCQTWithTargets"
-featureFolder = "../Features/mel128ChromaCQT"
+folderPath = "../Features/mel128ChromaCQTAllWithTargets"
+featureFolder = "../Features/mel128ChromaCQTAll"
 answerFolder = "../../../Downloads/AIST.RWC-MDB-P-2001.BEAT"
-listOfSongsInOrder = [i for i in range(1,101) if ('0'*(3-len(str(i))) + str(i)) not in weirdTimes]
+#listOfSongsInOrder = [i for i in range(1,101) if ('0'*(3-len(str(i))) + str(i)) not in weirdTimes]
+listOfSongsInOrder = [i for i in range(1,101)]
+#listOfSongsInOrder = weirdTimes
 featuresAndGT = getMoreFeaturesAndGroundTruthDownbeats(featureFolder, answerFolder, getChords = True)
 print("finished gettting stuff")
+print("len of features and gt ", len(featuresAndGT))
 for i in range(len(featuresAndGT)):
+    print(i)
     np.save(folderPath+"/"+str(listOfSongsInOrder[i])+"features", np.array(featuresAndGT[i][0]))
     np.save(folderPath+"/"+str(listOfSongsInOrder[i])+"beatTargets", np.array(featuresAndGT[i][1]))
     np.save(folderPath+"/"+str(listOfSongsInOrder[i])+"chordTargets", np.array(featuresAndGT[i][2]))
